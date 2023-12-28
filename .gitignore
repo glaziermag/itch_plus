@@ -1,0 +1,8 @@
+/target/
+/tests/
+/performance/
+/examples/
+/benches/
+.DS_Store
+.dockerignore
+01302019.NASDAQ_ITCH50
