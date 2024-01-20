@@ -1,8 +1,12 @@
 
-use crate::{order_book::{OrderBook, OrderBookHandle}, Symbol, Order, order::{OrderNode, OrderHandle}, level::Level};
+use crate::{order_book::order_book::OrderBook, orders::order::{OrderNode, Order}, levels::level::Level};
+
+pub trait MarketHandler {
+
+}
 
 #[derive(Clone)]
-pub struct MarketHandler {
+pub struct Handler {
     updates: u64,
     symbols: u64,
     max_symbols: u64,
@@ -18,9 +22,9 @@ pub struct MarketHandler {
     execute_orders: u64,
 }
 
-impl Default for MarketHandler {
+impl Default for Handler {
     fn default() -> Self {
-        MarketHandler {
+        Handler {
             updates: 0,
             symbols: 0,
             max_symbols: 1000, // You can set this to a sensible default value
@@ -38,7 +42,7 @@ impl Default for MarketHandler {
     }
 }
 
-impl<'a> MarketHandler {
+impl<'a> Handler {
     pub fn new(
         max_symbols: u64,
         max_order_books: u64,
@@ -46,7 +50,7 @@ impl<'a> MarketHandler {
         max_order_book_orders: u64,
         max_orders: u64
     ) -> Self {
-        MarketHandler {
+        Handler {
             updates: 0,
             symbols: 0,
             max_symbols,
@@ -63,7 +67,7 @@ impl<'a> MarketHandler {
         }
     }
     
-    pub fn on_add_order(&mut self, order_handle: OrderHandle) {
+    pub fn on_add_order(&mut self, order: Order) {
 
         self.updates += 1;
         self.orders += 1;
@@ -72,65 +76,61 @@ impl<'a> MarketHandler {
 
     }
     
-    pub fn on_delete_order(&self, order_handle: OrderHandle) {
-        println!("Deleted order_handle: {:?}", order_handle);
+    pub fn on_delete_order(&self, order: Order) {
+        println!("Deleted order: {:?}", order);
     }
 
     pub fn on_delete_order_node(&self, order_node: OrderNode) {
-        println!("Deleted order_handle: {:?}", order_node);
+        println!("Deleted order: {:?}", order_node);
     }
 
-    pub fn on_delete_duplicate_order(&self, order_handle: OrderHandle) {
-        println!("Deleted order_handle: {:?}", order_handle);
+    pub fn on_delete_duplicate_order(&self, order: Order) {
+        println!("Deleted order: {:?}", order);
     }
 
-    pub fn on_delete_unmatched_order(&self, order_handle: OrderHandle) {
-        println!("Deleted order_handle: {:?}", order_handle);
+    pub fn on_delete_unmatched_order(&self, order: Order) {
+        println!("Deleted order: {:?}", order);
     }
 
     pub fn on_add_order_node(&self, order_node: OrderNode) {
         println!("Added order node: {:?}", order_node);
     }
 
-    pub fn on_delete_symbol(&self, symbol: &Symbol) {
-        println!("Deleted symbol: {:?}", symbol);
-    }
-
     pub fn on_delete_order_book(&self, order_book: OrderBook) {
         println!("Deleted order book: {:?}", order_book);
     }
 
-    pub fn on_update_order(&self, order_handle: &Order) {
-        println!("Order Updated: {:?}", order_handle);
+    pub fn on_update_order(&self, order: &Order) {
+        println!("Order Updated: {:?}", order);
     }
 
-    pub fn on_execute_order(&self, order_handle: &Order, quantity: u64, price: u64) {
-        println!("Executed order_handle: {:?}, Quantity: {}, Price: {}", order_handle, quantity, price);
+    pub fn on_execute_order(&self, order: &Order, quantity: u64, price: u64) {
+        println!("Executed order: {:?}, Quantity: {}, Price: {}", order, quantity, price);
     }
 
-    pub fn on_execute_order_node(&self, order_handle: OrderHandle, quantity: u64, price: u64) {
-        println!("Executed order_handle: {:?}, Quantity: {}, Price: {}", order_handle, quantity, price);
+    pub fn on_execute_order_node(&self, order: Order, quantity: u64, price: u64) {
+        println!("Executed order: {:?}, Quantity: {}, Price: {}", order, quantity, price);
     }
 
     pub fn on_add_order_book(&self, order_book: OrderBook) {
         println!("Added order book: {:?}", order_book);
         // Implement specific logic for MarketHandler when an order book is added
     }
-    pub fn on_update_level(&self, order_book: OrderBookHandle, level: &Level, top: bool) {
+    pub fn on_update_level(&self, order_book: OrderBook, level: &Level, top: bool) {
         println!("Updated level in order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for updating a level...
     }
 
-    pub fn on_delete_level(&self, order_book: OrderBookHandle, level: &Level, top: bool) {
+    pub fn on_delete_level(&self, order_book: OrderBook, level: &Level, top: bool) {
         println!("Deleted level from order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for deleting a level...
     }
 
-    pub fn on_add_level(&self, order_book: OrderBookHandle, level: &Level, top: bool) {
+    pub fn on_add_level(&self, order_book: OrderBook, level: &Level, top: bool) {
         println!("Added level to order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for adding a level...
     }
-    pub fn on_update_order_book(&self, order_book: OrderBookHandle, top: bool) {
+    pub fn on_update_order_book(&self, order_book: OrderBook, top: bool) {
         println!("Updated order book: {:?}, Top: {}", order_book, top);
         // Additional logic for updating the order book...
     }

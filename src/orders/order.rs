@@ -1,7 +1,7 @@
 use core::fmt;
 use std::{sync::{Arc, Mutex, MutexGuard}, ops::Deref};
 
-use crate::LevelNodeHandle;
+use crate::levels::level::LevelNode;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum OrderSide {
@@ -15,7 +15,7 @@ impl Default for OrderSide {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum OrderType {
     Buy,
     Market,
@@ -72,21 +72,6 @@ impl fmt::Display for ErrorCode {
 impl From<&'static str> for ErrorCode {
     fn from(s: &'static str) -> Self {
         ErrorCode::OtherError(s.to_string())
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct OrderHandle(Arc<Mutex<Order>>);
-
-impl OrderHandle {
-    pub fn lock_unwrap(&self) -> MutexGuard<Order> {
-        self.0.lock().expect("Failed to lock the mutex")
-    }
-}
-
-impl PartialEq for OrderHandle {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -164,6 +149,10 @@ impl Order {
         Ok(())
     }
 
+    pub fn leaves_quantity(&self) -> u64 {
+        self.leaves_quantity
+    }
+
     pub fn is_market(&self) -> bool {
         self.order_type == OrderType::Market
     }
@@ -225,39 +214,12 @@ impl Order {
     pub fn visible_quantity(&self) -> u64 {
         std::cmp::min(self.leaves_quantity, self.max_visible_quantity)
     }
-
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct OrderNodeHandle(Arc<Mutex<OrderNode>>);
-
-impl OrderNodeHandle {
-    // Method to lock and unwrap the mutex guard
-    pub fn lock_unwrap(&self) -> MutexGuard<OrderNode> {
-        self.0.lock().expect("Failed to lock the OrderNode mutex")
-    }
-}
-
-impl PartialEq for OrderNodeHandle {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare the memory addresses of the Arcs
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Deref for OrderNodeHandle {
-    type Target = Mutex<OrderNode>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone)]
 pub struct OrderNode {
     // Nullable reference to LevelNode
-    pub order_handle: OrderHandle,
+    pub order: Order,
     pub id: u64,
     pub symbol_id: u64,
     pub slippage: u64,
@@ -267,7 +229,7 @@ pub struct OrderNode {
     pub executed_quantity: u64,
     pub hidden_quantity: u64,
     pub visible_quantity: u64,
-    pub level_node_handle: LevelNodeHandle,
+    pub level_node: LevelNode,
     pub order_type: OrderType,
     pub stop_price: u64,
     pub time_in_force: TimeInForce,
@@ -275,9 +237,9 @@ pub struct OrderNode {
 
 impl OrderNode {
     // Corresponds to the C++ constructor that accepts an Order
-    fn new(order_handle: OrderHandle) -> Self {
+    pub fn new(order: Order) -> Self {
         Self {
-            level_node_handle: todo!(),
+            level_node: todo!(),
             id: todo!(),
             symbol_id: todo!(),
             slippage: todo!(),
@@ -290,7 +252,7 @@ impl OrderNode {
             order_type: todo!(),
             stop_price: todo!(),
             time_in_force: todo!(),
-            order_handle: todo!(),
+            order: todo!(),
         }
     }
     pub fn is_limit(&self) -> bool {
@@ -328,8 +290,8 @@ impl OrderNode {
         false
     }
 
-    pub fn get_level_node(&self) -> LevelNodeHandle {
-        self.level_node_handle.clone()
+    pub fn get_level_node(&self) -> LevelNode {
+        self.level_node
     }
 
     // Check if the order is a trailing stop
@@ -343,7 +305,7 @@ impl OrderNode {
     }
 
     // Returns a mutable reference to the next OrderNode
-    pub fn next_mut(&self) -> Option<OrderNodeHandle> {
+    pub fn next_mut(&self) -> Option<&OrderNode> {
         self.next_mut()
     }
 

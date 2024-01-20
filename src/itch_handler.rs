@@ -13,7 +13,7 @@
 //         }
 //     }
 
-//     pub fn process<R: Read>(& self, mut reader: R) -> io::Result<()> {
+//     pub fn process<R: Read>(&self, mut reader: R) -> io::Result<()> {
 //         let mut buffer = [0; 1024]; // Adjust buffer size as needed
 //         loop {
 //             let size = reader.read(& buffer)?;
@@ -25,7 +25,7 @@
 //         Ok(())
 //     }
 
-//     fn process_buffer(& self, data: &[u8]) -> io::Result<()> {
+//     fn process_buffer(&self, data: &[u8]) -> io::Result<()> {
 //         let mut index = 0;
 //         while index < data.len() {
 //             if self.size == 0 {
@@ -118,10 +118,10 @@
 
 //         let mut cursor = Cursor::new(buffer);
 //         cursor.set_position(1); // Skip message type
-//         let stock_locate = cursor.read_u16::<BigEndian>().unwrap();
-//         let tracking_number = cursor.read_u16::<BigEndian>().unwrap();
-//         let timestamp = cursor.read_u64::<BigEndian>().unwrap();
-//         let order_reference_number = cursor.read_u64::<BigEndian>().unwrap();
+//         let stock_locate = cursor.read_u16::<BigEndian>();
+//         let tracking_number = cursor.read_u16::<BigEndian>();
+//         let timestamp = cursor.read_u64::<BigEndian>();
+//         let order_reference_number = cursor.read_u64::<BigEndian>();
 
 //         Ok(OrderDeleteMessage {
 //             stock_locate,
