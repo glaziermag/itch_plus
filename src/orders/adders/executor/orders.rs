@@ -1,56 +1,60 @@
 
 
-use crate::{market_executors::{executor::{MarketExecutor, Executor}, order_book_operations::OrderBooks}, market_handler::{MarketHandler}, orders::order::{ErrorCode, Order, OrderType}};
+use crate::{market_executors::{executor::{MarketExecutor, Execution}}, market_handler::{MarketHandler, Handler}, orders::{order::{ErrorCode, Order, OrderType}, orders::{Orders, OrderOps}}, order_book::order_book::BookOps};
 
-pub trait MarketOrders <E: Executor, O: OrderBooks, M: MarketHandler> {
-    fn add_order(executor: &E, order: Order, matching: bool, recursive: bool, market_handler: &M) -> Result<(), ErrorCode>;
-    fn add_market_order(executor: &E, order: Order, matching: bool, recursive: bool, market_handler: &M) -> Result<(), ErrorCode>;
+
+pub fn add_order<E: for<'a> Execution<'a>, B: for<'a> BookOps<'a>, H: Handler, O: OrderOps>(orders: O, order_books: B, order: Order, matching: bool, recursive: bool, market_handler: H) -> Result<(), ErrorCode> {
+    order.validate();
+    // let some_condition = true;
+    // if some_condition {
+    //     matching = true;
+    //     recursive = false;
+    // }
+
+    match order.order_type {
+        OrderType::Buy => {
+            // Handle Buy orders
+            todo!()
+        },
+        OrderType::Market => {
+            E::add_market_order(order_books, order, matching, recursive, market_handler)
+        },
+        OrderType::Limit => {
+            E::add_limit_order(order, matching, order_books, recursive, market_handler)
+        },
+        OrderType::Stop | OrderType::TrailingStop => {
+            E::add_stop_order(orders, order_books, order, matching, recursive, market_handler)
+        },
+        OrderType::StopLimit | OrderType::TrailingStopLimit => {
+            E::add_stop_limit_order(order_books, orders, market_handler, order, matching, recursive)
+        },
+        _ => Err(ErrorCode::OrderTypeInvalid),
+    }
 }
 
-impl<E: Executor, O: OrderBooks, M: MarketHandler> MarketOrders<E, O, M> for MarketExecutor {
+pub fn add_market_order<E: for<'a> Execution<'a>, H: Handler, B: for<'a> BookOps<'a>>(order_books: B, order: Order, matching: bool, recursive: bool, market_handler: H) -> Result<(), ErrorCode> {
 
-    fn add_order(executor: &E, order: Order, matching: bool, recursive: bool, market_handler: &M) -> Result<(), ErrorCode> {
-        order.validate();
+    let mut order_book = order_books.get_order_book(order.symbol_id);
 
-        match order.order_type {
-            OrderType::Buy => {
-                // Handle Buy orders
-                todo!()
-            },
-            OrderType::Market => {
-                executor.add_market_order(market_handler, order, matching, recursive)
-            },
-            OrderType::Limit => {
-                executor.add_limit_order(order, matching, recursive)
-            },
-            OrderType::Stop | OrderType::TrailingStop => {
-                executor.add_stop_order(order, matching, recursive)
-            },
-            OrderType::StopLimit | OrderType::TrailingStopLimit => {
-                executor.add_stop_limit_order(order, matching, recursive)
-            },
-            _ => Err(ErrorCode::OrderTypeInvalid),
-        }
+    // let some_condition = true;
+    // if some_condition {
+    //     matching = true;
+    //     recursive = false;
+    // }
+
+    H::on_add_order(order);
+
+    if matching && !recursive {
+        E::match_market(order_book, order);
     }
 
-    fn add_market_order(executor: &E, order_books: &O, order: Order, matching: bool, recursive: bool, market_handler: &M) -> Result<(), ErrorCode> {
+    H::on_delete_order(order);
 
-        let mut order_book = order_books.get_order_book(&order.symbol_id);
-
-        // market_handler.on_add_order(order);
-
-        if matching && !recursive {
-            executor.match_market(order_book, order);
-        }
-
-        // market_handler.on_delete_order(order);
-
-        if matching && !recursive {
-            executor.match_order_book(order_book, market_handler); // Assuming match_order also returns a Result
-        }
-        
-        let mut order_book = order_book.reset_matching_price();
-
-        Ok(())
+    if matching && !recursive {
+        E::match_order_book(order_book, market_handler); // Assuming match_order also returns a Result
     }
+    
+    let mut order_book = order_book.reset_matching_price();
+
+    Ok(())
 }

@@ -1,116 +1,123 @@
-use crate::{order_book::order_book::OrderBook, orders::order::{OrderNode, OrderType}, utilities::factory::Factory};
+use std::{cell::RefCell, rc::Rc, ptr};
 
-use super::level::{LevelNode, LevelType};
+use crate::{order_book::order_book::{OrderBook, BookOps}, orders::order::{OrderNode, OrderType}, market_executors::executor::Execution, references::Convertible};
 
-trait StopLevelOperations { 
-    fn best_buy_stop(&self) -> LevelNode;
-    fn best_sell_stop(&self) -> LevelNode;
-    fn add_stop_level(&self, order_node: &OrderNode) -> LevelNode;
-    fn delete_stop_level(&self, order_node: &OrderNode);
-    fn activate_stop_orders_level(&self, order_book: &OrderBook, level_node: LevelNode, stop_price: u64) -> bool;
-}   
+use super::{level::{Level, LevelType}, indexing::{LevelNode, RcNode, Tree}};
+  
 
-impl StopLevelOperations for OrderBook<'_> {
-    fn best_buy_stop(&self) -> LevelNode {
+impl OrderBook<'_> {
+    pub fn best_buy_stop(&self) -> Option<RcNode> {
         self.best_buy_stop
     }
 
     // Method to get the best sell stop level
-    fn best_sell_stop(&self) -> LevelNode {
+    pub fn best_sell_stop(&self) -> Option<RcNode> {
         self.best_sell_stop
     }
 
-    fn add_stop_level(&self, order_node: &OrderNode) -> LevelNode {
+    pub fn add_stop_level(&self, order_node: &OrderNode) -> Option<RcNode> {
         // Determine the level type and price based on the order node
         // Determine the price and create a level node
-        let (price, level_node) = if order_node.is_buy() {
-            let level_node = LevelNode::with_price(LevelType::Ask, order_node.stop_price);
-            (order_node.stop_price, level_node)
+        let level_option = if order_node.is_buy() {
+            Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order_node.stop_price))))
         } else {
-            let level_node = LevelNode::with_price(LevelType::Bid, order_node.stop_price);
-            (order_node.stop_price, level_node)
+            Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Bid, order_node.stop_price))))
         };
 
+        let level_node = *level_option.borrow_mut();
+
         if order_node.is_buy() {
-            self.buy_stop.insert(level_node.price, level_node);
-            //uninitialized arc pointer
-            if self.best_buy_stop == LevelNode::default() || (level_node.price < self.best_buy_stop.price) {
-                self.best_buy_stop = level_node;
+            self.buy_stop.insert(level_option);
+            // remove panicking behavior from code
+            let best_stop = self.best_buy_stop.expect("best stop").borrow();
+            if self.best_buy_stop.is_none() || (level_node.level.price < best_stop.level.price) {
+                self.best_buy_stop = Some(level_option);
             }
         } else {
-            self.sell_stop.insert(level_node.price, level_node);
-            if self.best_sell_stop == LevelNode::default() || (level_node.price < self.best_sell_stop.price) {
-                self.best_sell_stop = level_node;
+            self.sell_stop.insert(level_option);
+            // remove panicking behavior from code
+            let best_stop = self.best_buy_stop.expect("best stop").borrow();
+            if self.best_sell_stop.is_none() || (level_node.level.price < best_stop.level.price) {
+                self.best_sell_stop = Some(level_option);
             }
         }
-        level_node
+        Some(level_option)
     }
 
-    fn delete_stop_level(&self, order_node: &OrderNode) {
-        let level_node = order_node.level_node;
+    pub fn delete_stop_level(&self, order_node: &OrderNode) {
+
+        // remove panicking behavior from code
+        let level_node = order_node.level_node.expect("order node level node not retrieved");
 
         if order_node.is_buy() {
             // Update the best buy stop order price level
-            if self.best_buy_stop == level_node {
-                self.best_buy_stop = if self.best_buy_stop.right != LevelNode::default() {
-                    self.best_buy_stop.right
+            // remove panicking behavior from code
+            let stop_level = self.best_buy_stop.expect("buy stop not found");
+            let borrowed_level = *stop_level.borrow_mut();
+            if ptr::eq(&*stop_level, &*level_node) {
+                self.best_buy_stop = if borrowed_level.right.is_none() {
+                    borrowed_level.right
                 } else {
-                    self.best_buy_stop.parent
-                }
+                    borrowed_level.parent
+                }   
             }
             // Erase the price level from the buy stop orders collection
-            self.buy_stop.remove(&level_node.price);
+            (*stop_level.borrow_mut()).remove(borrowed_level.price);
         } else {
-            if self.best_sell_stop == level_node {
+            // remove panicking behavior from code
+            let stop_level = self.best_sell_stop.expect("buy stop not found");
+            let borrowed_level = *stop_level.borrow_mut();
+            if ptr::eq(&*stop_level, &*level_node)  {
                 // Update the best sell stop order price level
-                self.best_sell_stop = if self.best_sell_stop.right != LevelNode::default() {
-                    self.best_sell_stop.right
+                self.best_sell_stop = if borrowed_level.right.is_none() {
+                    borrowed_level.right
                 } else {
-                    self.best_sell_stop.parent
+                    borrowed_level.parent
                 }
             }
             // Erase the price level from the sell stop orders collection
-            self.sell_stop.remove(&level_node.price);
+            (*stop_level.borrow_mut()).remove(borrowed_level.price);
         }
+    }
+}
 
-        // Release the price level
-        // Assuming you have a method in your Rust implementation similar to C++'s Release
-       // self.level_pool.release(level_node.price);
+pub fn activate_stop_orders_level<E, B, C>(order_book: C, mut level: Level, stop_price: u64) -> bool 
+where
+    E: for<'a> Execution<'a>,
+    B: for<'a> BookOps<'a>,
+    C: Convertible<B>,
+{
+
+    let mut result = false;
+    
+    let arbitrage = if level.is_bid() {
+        stop_price <= level.price
+    } else {
+        stop_price >= level.price
+    };
+
+    if !arbitrage {
+        return false;
     }
 
-    fn activate_stop_orders_level(&self, order_book: &OrderBook, level_node: LevelNode, stop_price: u64) -> bool {
+    let mut activating_order = level.orders.front_mut();
+    while let Some(order_node) = activating_order {
+        // Clone next_order to avoid borrow_muting issues
+        let next_activating_order = order_node.next_mut();
 
-        let mut result = false;
-        
-        let arbitrage = if level_node.is_bid() {
-            stop_price <= level_node.price
-        } else {
-            stop_price >= level_node.price
-        };
-
-        if !arbitrage {
-            return false;
-        }
-
-        let mut activating_order = level_node.orders.front();
-        while let Some(order_node) = activating_order {
-            // Clone next_order to avoid borrow_muting issues
-            let next_activating_order = order_node.next_mut();
-
-            match order_node.order_type {
-                OrderType::Stop | OrderType::TrailingStop => {
-                    result |= self.activate_stop_order(order_book, order_node);
-                }
-                OrderType::StopLimit | OrderType::TrailingStopLimit => {
-                    result |= self.activate_stop_limit_order(order_book, order_node);
-                }
-                _ => {
-                    assert!(false, "Unsupported order type!");
-                }
+        match order_node.order_type {
+            OrderType::Stop | OrderType::TrailingStop => {
+                result |= E::activate_stop_order(order_book, order_node);
             }
-            //let next_order = next_activating_order;
-            activating_order = next_activating_order;
+            OrderType::StopLimit | OrderType::TrailingStopLimit => {
+                result |= E::activate_stop_limit_order(order_book, order_node);
+            }
+            _ => {
+                assert!(false, "Unsupported order type!");
+            }
         }
-        result
+        //let next_order = next_activating_order;
+        activating_order = next_activating_order;
     }
+    result
 }

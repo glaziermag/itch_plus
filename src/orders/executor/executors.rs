@@ -2,20 +2,17 @@
 
 use crate::{orders::order::{ErrorCode, OrderType}, market_executors::executor::MarketExecutor};
 
-trait Orders {
-    fn execute_order(&self, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode>;
-}
 
-impl Orders for MarketExecutor {
+impl MarketExecutor {
 
-    fn execute_order(&self, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode> {
+    pub fn execute_order(&self, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode> {
 
-        let mut order_node = self.get_order_node(&id).ok_or(ErrorCode::OrderNotFound)?;
+        let mut order_node = Self::get_order_node(&id).ok_or(ErrorCode::OrderNotFound)?;
 
-        let mut order_book = self.get_order_book(&order_node.order.symbol_id);
+        let mut order_book = Self::get_order_book(&order_node.order.symbol_id);
 
         let quantity = std::cmp::min(quantity, order_node.leaves_quantity);
-        // market_handler.on_execute_order_node(order_node, order_node.price, quantity);
+        H::on_execute_order_node(order_node, order_node.price, quantity);
         order_book.update_last_price(order_node.order, order_node.price);
         order_book.update_matching_price(order_node.order, order_node.price);
 
@@ -42,10 +39,10 @@ impl Orders for MarketExecutor {
         }
 
         if order_node.leaves_quantity > 0 {
-            // market_handler.on_update_order(&order_node.order);
+            H::on_update_order(&order_node.order);
         } else {
-            // market_handler.on_delete_order_node(order_node);
-            self.remove_order(&id);
+            H::on_delete_order_node(order_node);
+            Self::remove_order(&id);
             // order_pool.release(orders.get_mut(&id).ok_or(ErrorCode::OrderNotFound)?);
         }
 

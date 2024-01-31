@@ -25,7 +25,7 @@
 //         Ok(())
 //     }
 
-//     fn process_buffer(&self, data: &[u8]) -> io::Result<()> {
+//     pub fn process_buffer(&self, data: &[u8]) -> io::Result<()> {
 //         let mut index = 0;
 //         while index < data.len() {
 //             if self.size == 0 {
@@ -79,7 +79,7 @@
 //         Ok(())
 //     }
 
-//     fn process_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
+//     pub fn process_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
 //         match buffer.get(0) {
 //             Some(&b'H') => self.process_stock_trading_action_message(buffer),
 //             Some(&b'Y') => self.process_reg_sho_message(buffer),
@@ -89,7 +89,7 @@
 //         }
 //     }
 
-//     fn process_stock_trading_action_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
+//     pub fn process_stock_trading_action_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
 //         if buffer.len() != 25 {
 //             return Err("Invalid size for ITCH message type 'H'");
 //         }
@@ -100,7 +100,7 @@
 //         }))
 //     }
 
-//     fn process_reg_sho_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
+//     pub fn process_reg_sho_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
 //         if buffer.len() != 20 {
 //             return Err("Invalid size for ITCH message type 'Y'");
 //         }
@@ -111,7 +111,7 @@
 //         }))
 //     }
 
-//     fn process_order_delete_message(&self, buffer: &[u8]) -> Result<OrderDeleteMessage, &'static str> {
+//     pub fn process_order_delete_message(&self, buffer: &[u8]) -> Result<OrderDeleteMessage, &'static str> {
 //         if buffer.len() != 19 {
 //             return Err("Invalid size of the ITCH message type 'D'");
 //         }
@@ -133,7 +133,7 @@
 
 //     // ... other process_*_message methods ...
 
-//     fn on_message<T>(&self, message: T) -> bool
+//     pub fn on_message<T>(&self, message: T) -> bool
 //     where
 //         T: std::fmt::Debug,
 //     {
@@ -145,7 +145,7 @@
 // use warp::Filter;
 
 // #[tokio::main]
-// async fn main() {
+// async pub fn main() {
 //     // POST /itch with JSON-encoded ITCH message
 //     let itch = warp::post()
 //         .and(warp::path("itch"))
@@ -166,7 +166,7 @@
 //         .await;
 // }
 
-// fn process_itch_message(buffer: &[u8]) -> Result<HashMap<String, String>, &'static str> {
+// pub fn process_itch_message(buffer: &[u8]) -> Result<HashMap<String, String>, &'static str> {
 //     // Your ITCH processing logic here
 
 //     // For simplicity, we just return a dummy response

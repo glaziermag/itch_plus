@@ -1,113 +1,103 @@
 
+use std::{ptr, cell::RefCell, rc::Rc};
+
 use crate::{order_book::order_book::OrderBook, orders::order::OrderNode};
 
-use super::level::{LevelNode, LevelType};
+use super::{level::{Level, LevelType}, indexing::{LevelNode, RcNode, Tree}};
 
-trait TrailingStopLevelOperations { 
-    fn best_trailing_buy_stop(&self) -> LevelNode;
-    fn best_trailing_sell_stop(&self) -> LevelNode;
-    fn get_next_trailing_stop_level(&self, level_node: LevelNode) -> LevelNode;
-    fn delete_trailing_stop_level(&self, order_node: &OrderNode) -> LevelNode;
-    fn add_trailing_stop_level(&self, order_node: &OrderNode) -> LevelNode;
-    fn get_trailing_buy_stop_level(&mut self, price: u64) -> Option<&LevelNode>;
-    fn get_trailing_sell_stop_level(&mut self, price: u64) -> Option<&LevelNode>;
-}
-
-impl TrailingStopLevelOperations for OrderBook<'_> {
+impl OrderBook<'_> {
 
     // Method to get the best trailing buy stop level
-    fn best_trailing_buy_stop(&self) -> LevelNode {
+    pub fn best_trailing_buy_stop(&self) -> Option<RcNode> {
         self.best_trailing_buy_stop
     }
 
     // Method to get the best trailing sell stop level
-    fn best_trailing_sell_stop(&self) -> LevelNode {
+    pub fn best_trailing_sell_stop(&self) -> Option<RcNode> {
         self.best_trailing_sell_stop
     }
 
-    fn get_trailing_buy_stop_level(&mut self, price: u64) -> Option<&LevelNode> {
-        self.trailing_buy_stop.get(&price)
+    pub fn get_trailing_buy_stop_level(&mut self, price: u64) -> Option<RcNode> {
+        (*self.trailing_buy_stop.expect("best trailing buy stop failed").borrow_mut()).get(price)
     }
 
     // Method to get the trailing sell stop level
-    fn get_trailing_sell_stop_level(&mut self, price: u64) -> Option<&LevelNode> {
-        self.trailing_sell_stop.get(&price)
+    pub fn get_trailing_sell_stop_level(&mut self, price: u64) -> Option<RcNode> {
+        (*self.trailing_sell_stop.expect("best trailing sell stop failed").borrow_mut()).get(price)
     }
 
-    fn get_next_trailing_stop_level(&self, level_node: LevelNode) -> LevelNode {
+    pub fn get_next_trailing_stop_level<T: for<'a> Tree<'a>>(&self, level_node: RcNode) -> Option<RcNode> {
             
-        if level_node.is_bid() {
+        if (*level_node.borrow_mut()).is_bid() {
             // Find the next level in reverse order in _trailing_sell_stop
-            let var= self.trailing_sell_stop
-                .range(..level_node.price).rev() // Iterate in reverse up to the current price
-                .next()
-                .expect("next level")
-                .1;
-            *var  // Return the node if found
+            <LevelNode as Tree>::get_next_lower_level(self.trailing_sell_stop.expect("best trailing sell stop failed"))
         } else {
             // Find the next level in normal order in _trailing_buy_stop
-            let var = self.trailing_buy_stop
-                .range((level_node.price + 1)..) // Iterate starting from just above the current price
-                .next()
-                .expect("next level")                // Get the next element
-                .1;
-            *var
+            <LevelNode as Tree>::get_next_higher_level(self.trailing_buy_stop.expect("best trailing buy stop failed"))
         }
     }
 
-    fn delete_trailing_stop_level(&self, order_node: &OrderNode) -> LevelNode {
+    pub fn delete_trailing_stop_level(&self, order_node: &OrderNode) {
+
+        // remove panicking behavior from code
+        let level_node = order_node.level_node.expect("level node not retrieved");
         
-        let level_node = order_node.level_node;
         if order_node.is_buy() {
             // Update the best trailing buy stop order price level
-            if *level_node == *self.best_trailing_buy_stop() {
-                self.best_trailing_buy_stop = if self.best_trailing_buy_stop.right != LevelNode::default() {
-                    self.best_trailing_buy_stop.right
+            // remove panicking behavior from code
+            let best_stop = self.best_trailing_buy_stop.expect("best stop not retrieved");
+            if ptr::eq(&*best_stop, &*level_node) {
+                let borrow_stop = best_stop.borrow();
+                self.best_trailing_buy_stop = if borrow_stop.right.is_none() {
+                    borrow_stop.right.clone()
                 } else {
-                    self.best_trailing_buy_stop.parent
+                    borrow_stop.parent.clone()
                 }
             }
             // Erase the price level from the trailing buy stop orders collection
-            self.trailing_buy_stop.remove(&level_node.price);
+            (*self.trailing_buy_stop.expect("best trailing buy stop failed").borrow_mut()).remove((*level_node.borrow()).price);
         } else {
             // Update the best trailing sell stop order price level
-            if *level_node == *self.best_trailing_sell_stop() {
-                self.best_trailing_sell_stop = if self.best_trailing_sell_stop.left != LevelNode::default() {
-                    self.best_trailing_sell_stop.left
+            // remove panicking behavior from code
+            let best_stop = self.best_trailing_sell_stop.expect("best stop not retrieved");
+            if ptr::eq(&*best_stop, &*level_node) {
+                let borrow_stop = best_stop.borrow();
+                self.best_trailing_sell_stop = if borrow_stop.left.is_none() {
+                    borrow_stop.left.clone()
                 } else {
-                    self.best_trailing_sell_stop.parent
+                    borrow_stop.parent.clone()
                 }
             }
             // Erase the price level from the trailing sell stop orders collection
-            self.trailing_sell_stop.remove(&level_node.price);
+            (*self.trailing_sell_stop.expect("best trailing sell stop failed").borrow_mut()).remove((*level_node.borrow()).price);
         }
         // Release the price level
-        self.level_pool.release(level_node.price)
+       // self.level_pool.release(level_node.price)
     }
 
-    fn add_trailing_stop_level(&self, order_node: &OrderNode) -> LevelNode {
+    pub fn add_trailing_stop_level(&self, order_node: &OrderNode) -> Option<RcNode> {
 
         let (price, level_node) = if order_node.is_buy() {
-            let level_node = LevelNode::create(LevelType::Ask, order_node.stop_price);
+            let level_node = Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order_node.stop_price))));
             (order_node.stop_price, level_node)
         } else {
-            let level_node = LevelNode::create(LevelType::Bid, order_node.stop_price);
+            let level_node = Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Bid, order_node.stop_price))));
             (order_node.stop_price, level_node)
         };
         
         if order_node.is_buy() {
-            self.trailing_buy_stop.insert(level_node.price, level_node);
+            self.trailing_buy_stop.insert(level_node);
             // Update the best trailing buy stop order price level
-            if self.best_trailing_buy_stop == LevelNode::default() || (level_node.price < self.best_trailing_buy_stop().price) {
-                self.best_trailing_buy_stop = level_node;
+            if self.best_trailing_buy_stop.is_none() || ((*level_node.borrow()).price < (*self.best_trailing_buy_stop.expect("best trailing sell stop failed").borrow()).price) {
+                self.best_trailing_buy_stop = Some(level_node);
             }
         } else {
-            self.trailing_sell_stop.insert(level_node.price, level_node);
+            self.trailing_sell_stop.insert(level_node);
             // Update the best trailing sell stop order price level
-            if self.best_trailing_sell_stop == LevelNode::default() || (level_node.price < self.best_trailing_sell_stop().price) {
-                self.best_trailing_sell_stop = level_node;
+            if self.best_trailing_sell_stop.is_none() || ((*level_node.borrow()).price < (*self.best_trailing_sell_stop.expect("best trailing sell stop failed").borrow()).price) {
+                self.best_trailing_sell_stop = Some(level_node);
             }
         }
-        level_node
+        Some(level_node)
     }
 }

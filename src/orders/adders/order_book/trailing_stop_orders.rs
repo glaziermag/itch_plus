@@ -1,31 +1,24 @@
-use crate::{orders::order::OrderNode, order_book::order_book::OrderBook, levels::level::LevelNode};
+use crate::{orders::order::OrderNode, order_book::order_book::OrderBook, levels::level::{Level}};
 
-pub trait TrailingStopOrders {
-    fn add_trailing_stop_order(&self, order_node: &OrderNode);
-}
+impl OrderBook<'_> {
 
+    pub fn add_trailing_stop_order(&self, order_node: &OrderNode) {
 
-impl TrailingStopOrders for OrderBook<'_> {
-
-    fn add_trailing_stop_order(&self, order_node: &OrderNode) {
-
-        let level_node = if order_node.is_buy() {
-            let mut binding: LevelNode = Default::default();
-            self.trailing_buy_stop.get(&order_node.stop_price)
+        let level = if order_node.is_buy() {
+            (*self.trailing_buy_stop.borrow_mut()).get(&order_node.stop_price)
                 .or_else(|| {
-                    binding = self.add_trailing_stop_level(order_node);
+                    let mut binding: Level = self.add_trailing_stop_level(order_node);
                     Some(&binding)
-                })// Clones the Arc, not the LevelNode
+                })// Clones the Arc, not the Level
         } else {
-            let mut binding: LevelNode = Default::default();
-            self.trailing_sell_stop.get(&order_node.stop_price)
+            (*self.trailing_sell_stop.borrow_mut()).get(&order_node.stop_price)
                 .or_else(|| {
-                    binding = self.add_trailing_stop_level(order_node);
+                    let mut binding: Level = self.add_trailing_stop_level(order_node);
                     Some(&binding)
-                }) // Clones the Arc, not the LevelNode
+                }) // Clones the Arc, not the Level
         };
 
-        let node = level_node;
+        let node = level;
 
         let mut level = &node.level;
 
@@ -39,6 +32,6 @@ impl TrailingStopOrders for OrderBook<'_> {
         level.orders.list.push_back(order_node);
         level.orders += 1;
 
-        order_node.level_node.level = level;
+        order_node.level = level;
     }
 }

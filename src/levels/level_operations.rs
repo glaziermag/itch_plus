@@ -1,114 +1,121 @@
-use crate::{order_book::order_book::OrderBook, orders::order::OrderNode, utilities::factory::Factory};
+use std::{rc::Rc, cell::RefCell, borrow::Borrow, ptr};
 
-use super::level::{LevelNode, LevelType};
-use std::hash::Hash;
+use crate::{order_book::order_book::OrderBook, orders::order::OrderNode};
 
-trait LevelOperations {
-    fn best_ask(&self) -> Option<&LevelNode>;
-    fn best_bid(&self) -> Option<&LevelNode>;
-    fn get_bid(&mut self, price: u64) -> Option<&LevelNode>;
-    fn get_ask(&mut self, price: u64) -> Option<&LevelNode>;
-    fn get_next_level(&self, level: LevelNode) -> Option<&LevelNode>;
-    fn add_level(&self, order_node: &OrderNode) -> LevelNode;
-    fn create_and_insert_level(&self, order_node: &OrderNode, level_type: LevelType) -> Option<&LevelNode>;
-    fn delete_level(&self, order_node: &OrderNode) -> LevelNode;
-}
+use super::{level::{Level, LevelType}, indexing::{LevelNode, Tree, RcNode}};
 
-impl LevelOperations for OrderBook<'_>{
-    fn best_ask(&self) -> Option<&LevelNode> {
-        self.best_ask
-    }
+// pub trait Trees<'a> {
+//     fn create_and_insert_level(&self, price: u64, level_type: LevelType) -> Option<RcNode<'a>>;
+//     fn get_next_level_node(&self, level_node: &LevelNode<'a>) -> Option<RcNode<'a>>;
+//     fn delete_level(&self, order_node: &OrderNode<'a>) -> Option<RcNode<'a>>;
+//     fn add_level(&self, order_node: &OrderNode<'a>) -> Option<RcNode<'a>>;
+// }
 
-    fn best_bid(&self) -> Option<&LevelNode> {
-        self.best_bid
-    } 
-
-    fn get_bid(&mut self, price: u64) -> Option<&LevelNode> {
-        self.bids.get(&price)
-    }
-
-    fn get_ask(&mut self, price: u64) -> Option<&LevelNode> {
-        self.asks.get(&price)
-    }
-
-    fn create_and_insert_level<P>(&self, price: P, level_type: LevelType) -> Option<&LevelNode>
-        where
-            P: Eq + Hash,
-        {
+impl<'a> OrderBook<'a> {
+    pub fn create_and_insert_level<T: Tree<'a>>(&self, price: u64, level_type: LevelType, tree: T) -> Option<Rc<RefCell<LevelNode<'a>>>> {
         // Create a new price level based on the provided level type
         // Insert the price level into the appropriate collection based on level type
-        let node = LevelNode::create(level_type, price);
+        let new_node = Rc::new(RefCell::new(LevelNode::from(Level::with_price(level_type, price))));
         match level_type {
             LevelType::Bid => {
-                self.bids.insert(price, node);
+                if let Some(bids_root) = self.bids {
+                    T::insert(Rc::clone(&bids_root), Rc::clone(&new_node));
+                } else {
+                    // Handle the case where bids tree is empty
+                    self.bids = Some(new_node);
+                }
             },
             LevelType::Ask => {
-                self.asks.insert(price, node);
+                if let Some(asks_root) = self.asks {
+                    T::insert(Rc::clone(&asks_root), Rc::clone(&new_node));
+                } else {
+                    // Handle the case where bids tree is empty
+                    self.asks = Some(new_node);
+                }
             },
         }
-        node
+        Some(new_node)
     }
+}
 
-    fn get_next_level(&self, level: LevelNode) -> Option<&LevelNode> {
-        if level.is_bid() {
-            let mut iter = self.bids.range(..level.price).rev();
-            iter.next().map(|(_price, node)| node)
-        } else {
-            let mut iter = self.asks.range((level.price + 1)..);
-            iter.next().map(|(_price, node)| node)
-        }
-    }
+impl<'a> OrderBook<'a> {
 
-    fn delete_level(&self, order_node: &OrderNode) -> LevelNode {
-        let level_node = order_node.level_node;
+    pub fn delete_level(&self, order_node: &OrderNode) {
+        // remove panicking behavior from code
+        let level_node = order_node.level_node.expect("order node level not retrieved");
         if order_node.is_buy() {
-            if self.best_bid == level_node {
+            // remove panicking behavior from code
+            let best_bid = self.best_bid.expect("best bid not retrieved");
+            let borrowed_best = *best_bid.borrow_mut();
+            if ptr::eq(&*best_bid, &*level_node) {
                 // Update the best bid price level
-                self.best_bid = if self.best_bid.left != LevelNode::default() {
-                    self.best_bid.left
-                } else if self.best_bid.parent != LevelNode::default() {
-                    self.best_bid.parent
+                self.best_bid = if borrowed_best.left.is_some() {
+                    borrowed_best.left
+                } else if borrowed_best.parent.is_some() {
+                    borrowed_best.parent
                 } else {
-                    self.best_bid.right
+                    borrowed_best.right
                 };
-                self.bids.remove(&level_node.price);
+                (*self.bids.expect("bids not retrieved").borrow_mut()).remove((*level_node.borrow_mut()).price);
             }
             // Erase the price level from the bid collection
         } else {
-            if self.best_ask == level_node {
+            // remove panicking behavior from code
+            let best_ask: Rc<RefCell<LevelNode<'_>>> = self.best_ask.expect("best bid not retrieved");
+            let borrowed_best = *best_ask.borrow_mut();
+            if ptr::eq(&*best_ask, &*level_node) {
                 // Update the best bid price level
-                self.best_ask = if self.best_ask.right != LevelNode::default() {
-                    self.best_ask.right
-                } else if self.best_ask.parent != LevelNode::default() {
-                    self.best_ask.parent
+                self.best_ask = if borrowed_best.left.is_some() {
+                    borrowed_best.left
+                } else if borrowed_best.parent.is_some() {
+                    borrowed_best.parent
                 } else {
-                    self.best_ask.left
+                    borrowed_best.right
                 };
-                self.asks.remove(&level_node.price);
+                (*self.asks.expect("asks not retrieved").borrow_mut()).remove((*level_node.borrow_mut()).price);
             }
         }
-        LevelNode::default()
     }
 
-    fn add_level(&self, order_node: &OrderNode) -> Option<&LevelNode> {
+    pub fn add_level<T: Tree<'a>>(&self, order_node: &OrderNode, tree: T) -> Option<RcNode<'a>> {
 
-        let level_node: LevelNode;
+        let level_node = self.create_and_insert_level(order_node.price, if order_node.is_buy() { LevelType::Bid } else { LevelType::Ask }, tree);
+        // remove panicking behavior from code
+        let node_borrow = level_node.expect("node creation failed").borrow_mut();
+        
         if order_node.is_buy() {
-            let level_node = self.create_and_insert_level(order_node, LevelType::Bid);
-
-            self.bids.insert(level_node.price, level_node);
-            if self.best_bid == LevelNode::default() || level_node.price > self.best_bid.price {
+            // remove panicking behavior from code
+            if self.best_bid.is_none() || (*node_borrow).price > (*self.best_bid.expect("best bid failed")).borrow().price {
                 self.best_bid = level_node
             }
-            level_node
         } else {
-            let level_node = self.create_and_insert_level(order_node, LevelType::Ask);
-
-            self.bids.insert(level_node.price, level_node);
-            if self.best_ask == LevelNode::default() || level_node.price < self.best_ask.price {
+            // remove panicking behavior from code
+            if self.best_ask.is_none() || (*node_borrow).price < (*self.best_ask.expect("best ask failed")).borrow().price {
                 self.best_ask = level_node
             }
-            level_node
         }
+        level_node
+    }
+
+    pub fn get_next_level_node(&self, level_node: &LevelNode<'a>) -> Option<RcNode<'a>> {
+        todo!()
+    }
+}
+
+impl<'a> OrderBook<'_>{
+    pub fn best_ask(&self) -> Option<RcNode<'a>> {
+        self.best_ask
+    }
+
+    pub fn best_bid(&self) -> Option<RcNode<'a>> {
+        self.best_bid
+    } 
+
+    pub fn get_bid(&mut self, price: u64) -> Option<Rc<RefCell<LevelNode<'_>>>> {
+        (*self.bids.expect("bids not retrieved during get").borrow_mut()).get(price)
+    }
+
+    pub fn get_ask(&mut self, price: u64) -> Option<Rc<RefCell<LevelNode<'_>>>>{
+        (*self.asks.expect("asks not retrieved during get").borrow_mut()).get(price)
     }
 }

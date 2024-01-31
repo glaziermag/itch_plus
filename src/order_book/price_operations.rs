@@ -1,45 +1,37 @@
 use std::cmp::{max, min};
 
-use crate::{levels::level::{LevelNode, LevelType}, orders::order::{Order, OrderType}};
+use crate::{levels::{level::{Level, LevelType}, indexing::LevelNode}, orders::order::{Order, OrderType}};
 
 use super::order_book::OrderBook;
 
-pub trait PriceOperations {
-    fn reset_matching_price(&self);
-    fn get_market_ask_price(&self) -> u64;
-    fn get_market_bid_price(&self) -> u64;
-    fn update_last_price(&self, order: Order, price: u64);
-    fn update_matching_price(&self, order: Order, price: u64);
-    fn recalculate_trailing_stop_price(&self, order_book: &OrderBook, level_node: LevelNode);
-    fn calculate_trailing_stop_price(&self, order: Order) -> u64;
-}
+impl OrderBook<'_> {
 
-impl PriceOperations for OrderBook<'_> {
-
-    fn reset_matching_price(&self) {
+    pub fn reset_matching_price(&self) {
         self.matching_bid_price = 0;
         self.matching_ask_price = u64::MAX;
     }
 
-    fn get_market_ask_price(&self) -> u64 {
-        let best_price = if self.best_ask != LevelNode::default() {
-            self.best_ask.price
+    pub fn get_market_ask_price(&self) -> u64 {
+        let best_price = if self.best_ask.is_some() {
+            // remove panicking behavior from code
+            self.best_ask.expect("market ask price").price
         } else {
             u64::MAX
         };
         min(best_price, self.matching_ask_price)
     }
 
-    fn get_market_bid_price(&self) -> u64 {
-        let best_price = if self.best_bid != LevelNode::default() {
-            self.best_bid.price
+    pub fn get_market_bid_price(&self) -> u64 {
+        let best_price = if self.best_bid.is_some() {
+            // remove panicking behavior from code
+            self.best_bid.expect("market bid price").price
         } else {
             0
         };
         max(best_price, self.matching_bid_price)
     }
 
-    fn update_last_price(&self, order: Order, price: u64) {
+    pub fn update_last_price(&self, order: Order, price: u64) {
         if order.is_buy() {
             self.last_bid_price = price;
         } else {
@@ -47,7 +39,7 @@ impl PriceOperations for OrderBook<'_> {
         }
     }
 
-    fn update_matching_price(&self, order: Order, price: u64) {
+    pub fn update_matching_price(&self, order: Order, price: u64) {
         if order.is_buy() {
             self.matching_bid_price = price;
         } else {
@@ -55,7 +47,7 @@ impl PriceOperations for OrderBook<'_> {
         }
     }
 
-    fn calculate_trailing_stop_price(&self, order: Order) -> u64 {
+    pub fn calculate_trailing_stop_price(&self, order: Order) -> u64 {
         // Get the current market price
         let market_price = if order.is_buy() {
             self.get_market_trailing_stop_price_ask()
@@ -93,12 +85,12 @@ impl PriceOperations for OrderBook<'_> {
         old_price
     }
 
-    fn recalculate_trailing_stop_price(&self, mut order_book: &OrderBook, level_node: LevelNode) {
+    pub fn recalculate_trailing_stop_price(&self, mut order_book: C,  level: Level) {
         let mut new_trailing_price;
 
         // Skip recalculation if market price goes in the wrong direction
-        match level_node.level_type {
-            Some(LevelType::Ask) => {
+        match level.level_type {
+            LevelType::Ask => {
                 let old_trailing_price = order_book.trailing_ask_price;
                 new_trailing_price = order_book.get_market_trailing_stop_price_ask();
                 if new_trailing_price >= old_trailing_price {
@@ -106,7 +98,7 @@ impl PriceOperations for OrderBook<'_> {
                 }
                 order_book.trailing_ask_price = new_trailing_price;
             },
-            Some(LevelType::Bid) => {
+           LevelType::Bid => {
                 let old_trailing_price = order_book.trailing_bid_price;
                 new_trailing_price = order_book.get_market_trailing_stop_price_bid();
                 if new_trailing_price <= old_trailing_price {
@@ -114,11 +106,10 @@ impl PriceOperations for OrderBook<'_> {
                 }
                 order_book.trailing_bid_price = new_trailing_price;
             },
-            None => todo!(),
         }
 
         // Recalculate trailing stop self.orders
-        let mut current = match level_node.level_type {
+        let mut current = match level.level_type {
             LevelType::Ask => {
                 order_book.best_trailing_buy_stop
             },
@@ -128,14 +119,12 @@ impl PriceOperations for OrderBook<'_> {
         };
 
         let mut previous: Option<LevelNode> = None;
-        let mut current = Some(current);
 
-        while let Some(ref current_level) = current {
+        while let Some(current_level) = current {
             let mut recalculated = false;
             let mut node = current_level.orders.front_mut();
 
             while let Some(order_node) = node {
-                let next_order = order_node.next_mut();
                 let old_stop_price = order_node.stop_price;
                 let new_stop_price = order_book.calculate_trailing_stop_price(order_node.order);
 
@@ -152,24 +141,24 @@ impl PriceOperations for OrderBook<'_> {
                         },
                         _ => panic!("Unsupported order type!"),
                     }
-                    // market_handler.on_update_order(&order_node.order);
+                    H::on_update_order(&order_node.order);
                     order_book.add_trailing_stop_order(order_node);
                     recalculated = true;
                 }
+                let next_order = order_node.next_mut();
                 node = next_order;
             }
 
             if recalculated {
-                let current = if let Some(ref prev) = previous {
+                let current = if let Some(prev) = previous {
                     Some(prev) 
-                } else if level_node.level_type == Some(LevelType::Ask) {
-                    Some(order_book.best_trailing_buy_stop)
+                } else if level.level_type == LevelType::Ask {
+                    order_book.best_trailing_buy_stop
                 } else {
-                    Some(order_book.best_trailing_sell_stop)
+                    order_book.best_trailing_sell_stop
                 };
             } else {
                 previous = current;
-                
                 current = Some(order_book.get_next_trailing_stop_level(current_level));
             }
         }

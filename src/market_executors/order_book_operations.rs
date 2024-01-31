@@ -1,68 +1,80 @@
 use std::collections::HashMap;
 
-use crate::orders::order::OrderType;
+
+use crate::market_handler::Handler;
 use crate::levels::level::{LevelUpdate, UpdateType};
-use crate::market_executors::executor::MarketExecutor;
 use crate::order_book::order_book::OrderBook;
 use crate::orders::order::ErrorCode;
 
-pub(crate) trait OrderBooks {
-    fn add_order_book(&mut self, order_type: OrderType, order_book: OrderBook) -> Result<(), ErrorCode>;
-    fn insert_order_book(&self, symbols: Vec<u64>, symbol: u64) -> Result<(), ErrorCode>;
-    fn get_order_book(&self, order_type: OrderType) -> Result<&OrderBook, ErrorCode>;
-    fn remove_order_book(&mut self, order_type: OrderType) -> Result<OrderBook, ErrorCode>;
-    fn update_level(&self, order_book: &OrderBook, update: LevelUpdate) -> Result<(), &'static str>;
+use std::ops::{Deref, DerefMut};
+
+pub struct OrderBooks<'a> {
+    books: HashMap<u64, OrderBook<'a>>,
 }
 
-impl OrderBooks for HashMap<u64, OrderBook<'_>> {
-    fn add_order_book(&mut self, order_type: OrderType, order_book: OrderBook) -> Result<(), ErrorCode> {
-        if self.order_books.contains_key(&order_type) {
-            Err(ErrorCode::OrderBookAlreadyExists)
+impl<'a> Deref for OrderBooks<'a> {
+    type Target = HashMap<u64, OrderBook<'a>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.books
+    }
+}
+
+impl<'a> DerefMut for OrderBooks<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.books
+    }
+}
+
+impl<'a> OrderBooks<'a>  {
+    pub fn add_order_book(&mut self, symbol: u64, order_book: OrderBook) -> Result<(), ErrorCode> {
+        if self.contains_key(&symbol) {
+            Err(ErrorCode::OrderBookDuplicate)
         } else {
-            self.order_books.insert(order_type, order_book);
+            self.insert(symbol, order_book);
             Ok(())
         }
     }
 
-    fn insert_order_book(&self, symbols: Vec<u64>, mut symbol: u64) -> Result<(), ErrorCode> {
+    pub fn insert_order_book(&self, symbols: Vec<u64>, mut symbol: u64) -> Result<(), ErrorCode> {
         // Check if the symbol exists
         if !symbols.contains(&symbol) {
             return Err(ErrorCode::SymbolNotFound);
         }
 
         // Check for existing OrderBook
-        if self.order_books.contains_key(&symbol) {
+        if self.contains_key(&symbol) {
             return Err(ErrorCode::OrderBookDuplicate);
         }
 
         // Create a new OrderBook
         // Assuming OrderBook::new() does not require a weak reference to MarketExecutor
-        let order_book = OrderBook::default();
+        let order_book = OrderBook::new();
 
         // Insert the new OrderBook into the HashMap
-        self.order_books.insert(symbol, order_book);
+        self.insert(symbol, order_book);
 
         Ok(())
     }
 
-    fn get_order_book(&self, order_type: OrderType) -> Result<&OrderBook, ErrorCode> {
-        self.order_books.get(&order_type).ok_or(ErrorCode::OrderBookNotFound)
+    pub fn get_order_book(&self, symbol: &u64) -> Result<&OrderBook, ErrorCode> {
+        self.get(&symbol).ok_or(ErrorCode::OrderBookNotFound)
     }
 
-    fn remove_order_book(&mut self, order_type: OrderType) -> Result<OrderBook, ErrorCode> {
-        self.order_books.remove(&order_type).ok_or(ErrorCode::OrderBookNotFound)
+    pub fn remove_order_book(&mut self, symbol: &u64) -> Result<OrderBook, ErrorCode> {
+        self.remove(&symbol).ok_or(ErrorCode::OrderBookNotFound)
     }
 
-    fn update_level(&self, order_book: &OrderBook, update: LevelUpdate) -> Result<(), &'static str> {
+    pub fn update_level<H: Handler>(&self, order_book: C,  update: LevelUpdate, market_handler: H) -> Result<(), &'static str> {
         match update.update_type {
-            UpdateType::Add => self.market_handler.on_add_level(order_book, &update.update, update.top),
-            UpdateType::Update => self.market_handler.on_update_level(order_book, &update.update, update.top),
-            UpdateType::Delete => self.market_handler.on_delete_level(order_book, &update.update, update.top),
+            UpdateType::Add => H::on_add_level(order_book, update.update_type, update.top),
+            UpdateType::Update => H::on_update_level(order_book, update.update_type, update.top),
+            UpdateType::Delete => H::on_delete_level(order_book, update.update_type, update.top),
             _ => {
                 eprintln!("Warning: Received an unexpected update type in update_level");
             },
         };
-        Ok(self.market_handler.on_update_order_book(order_book, update.top))
+        Ok(H::on_update_order_book(order_book, update.top))
     }
 }
 

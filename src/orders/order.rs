@@ -1,7 +1,7 @@
 use core::fmt;
-use std::{sync::{Arc, Mutex, MutexGuard}, ops::Deref};
+use std::{sync::{Arc, Mutex, MutexGuard}, ops::Deref, cell::RefCell, rc::Rc};
 
-use crate::levels::level::LevelNode;
+use crate::levels::{indexing::RcNode};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum OrderSide {
@@ -32,7 +32,7 @@ impl Default for OrderType {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 pub enum TimeInForce {
     IOC,
     FOK,
@@ -216,11 +216,11 @@ impl Order {
     }
 }
 
-#[derive(PartialEq, Debug, Default, Clone)]
-pub struct OrderNode {
-    // Nullable reference to LevelNode
+#[derive(PartialEq)]
+pub struct OrderNode<'a> {
+    // Nullable reference to Level
     pub order: Order,
-    pub id: u64,
+    pub id: i64,
     pub symbol_id: u64,
     pub slippage: u64,
     pub price: u64,
@@ -229,17 +229,16 @@ pub struct OrderNode {
     pub executed_quantity: u64,
     pub hidden_quantity: u64,
     pub visible_quantity: u64,
-    pub level_node: LevelNode,
+    pub level_node: Option<RcNode<'a>>,
     pub order_type: OrderType,
     pub stop_price: u64,
     pub time_in_force: TimeInForce,
 }
 
-impl OrderNode {
+impl OrderNode<'_> {
     // Corresponds to the C++ constructor that accepts an Order
     pub fn new(order: Order) -> Self {
         Self {
-            level_node: todo!(),
             id: todo!(),
             symbol_id: todo!(),
             slippage: todo!(),
@@ -253,6 +252,7 @@ impl OrderNode {
             stop_price: todo!(),
             time_in_force: todo!(),
             order: todo!(),
+            level_node: todo!(),
         }
     }
     pub fn is_limit(&self) -> bool {
@@ -290,10 +290,6 @@ impl OrderNode {
         false
     }
 
-    pub fn get_level_node(&self) -> LevelNode {
-        self.level_node
-    }
-
     // Check if the order is a trailing stop
     pub fn is_trailing_stop(&self) -> bool {
         matches!(self.order_type, OrderType::TrailingStop)
@@ -305,7 +301,7 @@ impl OrderNode {
     }
 
     // Returns a mutable reference to the next OrderNode
-    pub fn next_mut(&self) -> Option<&OrderNode> {
+    pub fn next_mut(&self) -> Option<&mut OrderNode> {
         self.next_mut()
     }
 

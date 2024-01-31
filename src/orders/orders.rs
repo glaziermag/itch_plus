@@ -1,19 +1,40 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash, ops::{Deref, DerefMut}};
 
 use super::order::Order;
 
+pub trait OrderOps {
 
-pub trait Orders {
-    fn insert_order(&mut self, id: u64, order: Order);
-    fn remove_order(&mut self, id: u64) -> Option<Order>;
 }
 
-impl Orders for HashMap<u64, Order> {
-    fn insert_order(&mut self, id: u64, order: Order) {
+impl OrderOps for Orders {
+    
+}
+
+pub struct Orders {
+    orders: HashMap<u64, Order>
+}
+
+
+impl<'a> Deref for Orders {
+    type Target = HashMap<u64, Order>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.orders
+    }
+}
+
+impl<'a> DerefMut for Orders {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.orders
+    }
+}
+
+impl Orders {
+    pub fn insert_order(&mut self, id: u64, order: Order) {
         self.insert(id, order);
     }
 
-    fn remove_order(&mut self, id: u64) -> Option<Order> {
+    pub fn remove_order(&mut self, id: u64) -> Option<Order> {
         self.remove(&id)
     }
 }
