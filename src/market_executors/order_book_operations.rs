@@ -1,10 +1,13 @@
+use std::borrow::Borrow;
 use std::collections::HashMap;
 
 
 use crate::market_handler::Handler;
 use crate::levels::level::{LevelUpdate, UpdateType};
-use crate::order_book::order_book::OrderBook;
+use crate::order_book::order_book::{OrderBook};
 use crate::orders::order::ErrorCode;
+
+
 
 use std::ops::{Deref, DerefMut};
 
@@ -65,7 +68,7 @@ impl<'a> OrderBooks<'a>  {
         self.remove(&symbol).ok_or(ErrorCode::OrderBookNotFound)
     }
 
-    pub fn update_level<H: Handler>(&self, order_book: C,  update: LevelUpdate, market_handler: H) -> Result<(), &'static str> {
+    pub fn update_level<H: Handler, C: Deref<Target = OrderBook<'a>>>(&self, order_book: C, update: LevelUpdate) -> Result<(), &'static str> {
         match update.update_type {
             UpdateType::Add => H::on_add_level(order_book, update.update_type, update.top),
             UpdateType::Update => H::on_update_level(order_book, update.update_type, update.top),

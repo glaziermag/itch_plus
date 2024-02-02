@@ -1,5 +1,4 @@
 use core::fmt;
-use std::{sync::{Arc, Mutex, MutexGuard}, ops::Deref, cell::RefCell, rc::Rc};
 
 use crate::levels::{indexing::RcNode};
 
@@ -89,8 +88,8 @@ pub struct Order {
     pub time_in_force: TimeInForce,
     pub max_visible_quantity: u64,
     pub slippage: u64,
-    pub trailing_distance: i64,
-    pub trailing_step: i64,
+    pub trailing_distance: u64,
+    pub trailing_step: u64,
 }
 
 impl Default for Order {
@@ -220,7 +219,7 @@ impl Order {
 pub struct OrderNode<'a> {
     // Nullable reference to Level
     pub order: Order,
-    pub id: i64,
+    pub id: u64,
     pub symbol_id: u64,
     pub slippage: u64,
     pub price: u64,

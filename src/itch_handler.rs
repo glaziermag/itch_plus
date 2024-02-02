@@ -9,7 +9,7 @@
 //     pub fn new() -> Self {
 //         ITCHHandler {
 //             size: 0,
-//             cache: Vec::new(),
+//             cache: VeB::new(),
 //         }
 //     }
 
