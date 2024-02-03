@@ -6,6 +6,7 @@ pub type RcCell<T> = Rc<RefCell<T>>;
 
 pub type RcNode<'a> = RcCell<LevelNode<'a>>;
 
+#[derive(PartialEq, Debug)]
 pub struct LevelNode<'a> {
     pub level: Level<'a>, // Assuming Level is an u64 for simplicity
     pub parent: Option<RcNode<'a>>,
@@ -13,21 +14,10 @@ pub struct LevelNode<'a> {
     pub right: Option<RcNode<'a>>,
 }
 
-impl<'a> LevelNode<'a> {
-    // Helper function to find the minimum node starting from a given node
-    fn find_min(node: RcNode<'a>) -> RcNode<'a> {
-        let mut current = node;
-        while let Some(left) = current.borrow().left.clone() {
-            current = left;
-        }
-        current
-    }
-}
-
 impl<'a> Deref for LevelNode<'a> {
     type Target = Level<'a>;
 
-    fn deref(&self) -> &Tree::Target {
+    fn deref(&self) -> &Self::Target {
         &self.level
     }
 }
@@ -50,11 +40,20 @@ pub trait Tree<'a> {
     fn get(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>>;
     fn remove(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>>;
     fn remove_recursive(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>>;
+    fn find_min(node: RcNode<'a>) -> RcNode<'a>;
 }
 
+// Helper function to find the minimum node starting from a given node
+fn find_min<'a, T: Tree<'a>>(node: RcNode<'a>) -> RcNode<'a> {
+    let mut current = node;
+    while let Some(left) = current.borrow().left.clone() {
+        current = left;
+    }
+    current
+}
 
-fn get(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
-    let mut current = Some(Rc::clone(&Rc::new(RefCell::new(*node))));
+fn get<'a, T: Tree<'a>>(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
+    let mut current = node;
     while let Some(node) = current {
         let borrowed_node = node.borrow();
         let node_price = borrowed_node.price;
@@ -69,28 +68,28 @@ fn get(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
     None
 }
 
-fn remove(mut node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
+fn remove<'a, T: Tree<'a>>(mut node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
     // This is a placeholder implementation and may need adjustments
     // based on the specific requirements of your binary tree.
     // For example, you might need to handle rebalancing the tree
     // after removal, which is not covered here.
 
     // Note: This implementation assumes `self.root` exists as part of the LevelNode structure.
-    node = Tree::remove_recursive(node.take(), price);
+    node = T::remove_recursive(node.take(), price);
     node.clone()
 }
 
-fn remove_recursive(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
+fn remove_recursive<'a, T: Tree<'a>>(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
     let node = match node {
         Some(n) => n,
         None => return None,
     };
 
     if price < node.borrow().price {
-        let left = Tree::remove_recursive(node.borrow().left.clone(), price);
+        let left = T::remove_recursive(node.borrow().left.clone(), price);
         node.borrow_mut().left = left;
     } else if price > node.borrow().price {
-        let right = Tree::remove_recursive(node.borrow().right.clone(), price);
+        let right = T::remove_recursive(node.borrow().right.clone(), price);
         node.borrow_mut().right = right;
     } else {
         // Node with only one child or no child
@@ -101,26 +100,26 @@ fn remove_recursive(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> 
         }
 
         // Node with two children: Get the inorder successor (smallest in the right subtree)
-        let temp = Tree::find_min(node.borrow().right.clone().unwrap());
+        let temp = T::find_min(node.borrow().right.clone().unwrap());
         node.borrow_mut().price = temp.borrow().price;
-        node.borrow_mut().right = Tree::remove_recursive(node.borrow().right.clone(), temp.borrow().price);
+        node.borrow_mut().right = T::remove_recursive(node.borrow().right.clone(), temp.borrow().price);
     }
 
     Some(node)
 }
 
-fn insert(this_node: RcNode, new_node: RcNode) {
+fn insert<T: for<'a> Tree<'a>>(this_node: RcNode, new_node: RcNode) {
 
     if new_node.borrow().price < this_node.borrow().price {
         if let Some(left) = this_node.borrow().left {
-            Tree::insert(left, new_node);
+            T::insert(left, new_node);
         } else {
             new_node.borrow_mut().parent = Some(Rc::clone(&this_node));
             this_node.borrow_mut().left = Some(new_node);
         }
     } else {
         if let Some(right) = this_node.borrow().right {
-            Tree::insert(right, new_node);
+            T::insert(right, new_node);
         } else {
             new_node.borrow_mut().parent = Some(Rc::clone(&this_node));
             this_node.borrow_mut().right = Some(new_node);
@@ -128,17 +127,17 @@ fn insert(this_node: RcNode, new_node: RcNode) {
     }
 }
 
-fn get_next_level_node(level_node: RcNode) -> Option<RcNode<'a>> {
-    if (*level_node.borrow()).level.is_bid() {
+fn get_next_level_node<'a, T: Tree<'a>>(level_node: RcNode) -> Option<RcNode<'a>> {
+    if (*level_node).borrow().level.is_bid() {
         // For a bid, find the next lower level
-        Tree::get_next_lower_level(level_node)
+        T::get_next_lower_level(level_node)
     } else {
         // For an ask, find the next higher level
-        Tree::get_next_higher_level(level_node)
+        T::get_next_higher_level(level_node)
     }
 }
 
-fn get_next_lower_level(mut level_node: RcNode) -> Option<RcNode<'a>> {
+fn get_next_lower_level<'a>(mut level_node: RcNode) -> Option<RcNode<'a>> {
     
     if let Some(left_child) = level_node.borrow().left {
         // If there is a left child, go left and then as far right as possible
@@ -158,7 +157,7 @@ fn get_next_lower_level(mut level_node: RcNode) -> Option<RcNode<'a>> {
     Some(level_node)
 }
 
-fn get_next_higher_level(mut level_node: RcNode) -> Option<RcNode<'a>> {
+fn get_next_higher_level<'a>(mut level_node: RcNode) -> Option<RcNode<'a>> {
 
     if let Some(right_child) = level_node.borrow().right {
         // If there is a right child, go right and then as far left as possible
@@ -208,7 +207,7 @@ impl<'a> InOrderIterator<'a> {
 impl<'a> Iterator for InOrderIterator<'a> {
     type Item = RcNode<'a>;
 
-    fn next(&mut self) -> Option<Tree::Item> {
+    fn next(&mut self) -> Option<Self::Item> {
         if let Some(node) = self.stack.pop() {
             self.next_node = node.borrow().right.clone();
             self.move_to_leftmost();

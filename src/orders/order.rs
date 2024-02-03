@@ -1,6 +1,7 @@
 use core::fmt;
 
-use crate::levels::{indexing::RcNode};
+
+use crate::levels::indexing::RcNode;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum OrderSide {
@@ -57,7 +58,7 @@ pub enum ErrorCode {
     OrderTypeInvalid,
     OrderParameterInvalid,
     OrderQuantityInvalid,
-    OrderNodeCreationError,
+    OrderCreationError,
     DummyError,
     OtherError(String),
 }
@@ -75,7 +76,7 @@ impl From<&'static str> for ErrorCode {
 }
 
 #[derive(PartialEq, Debug)]
-pub struct Order {
+pub struct Order<'a> {
     pub id: u64,
     pub symbol_id: u64,
     pub order_type: OrderType,
@@ -85,14 +86,17 @@ pub struct Order {
     pub quantity: u64,
     pub executed_quantity: u64,
     pub leaves_quantity: u64,
+    pub hidden_quantity: u64,
+    pub visible_quantity: u64,
     pub time_in_force: TimeInForce,
     pub max_visible_quantity: u64,
     pub slippage: u64,
     pub trailing_distance: u64,
     pub trailing_step: u64,
+    pub level_node: Option<RcNode<'a>>,
 }
 
-impl Default for Order {
+impl Default for Order<'_> {
     fn default() -> Self {
         Order {
             id: 0,
@@ -109,11 +113,14 @@ impl Default for Order {
             slippage: 0,
             trailing_distance: 0,
             trailing_step: 0,
+            hidden_quantity: todo!(),
+            visible_quantity: todo!(),
+            level_node: todo!(),
         }
     }
 }
 
-impl Order {
+impl Order<'_> {
 
     pub fn validate(&self) -> Result<(), ErrorCode> {
         // Validate order Id
@@ -156,52 +163,6 @@ impl Order {
         self.order_type == OrderType::Market
     }
 
-    pub fn is_limit(&self) -> bool {
-        self.order_type == OrderType::Limit
-    }
-
-    pub fn is_trailing_stop(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.order_type == OrderType::TrailingStop
-    }
-
-    pub fn is_trailing_stop_limit(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.order_type == OrderType::TrailingStopLimit
-    }
-
-    pub fn is_buy(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.order_side == OrderSide::Buy
-    }
-
-    pub fn is_fok(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.time_in_force == TimeInForce::FOK
-    }
-
-    pub fn is_iceberg(&self) -> bool {
-        // Implement based on your application's requirements
-        false
-    }
-
-    pub fn is_slippage(&self) -> bool {
-        // Implement based on your application's requirements
-        false
-    }
-
-    pub fn is_aon(&self) -> bool {
-        // Implement based on your application's requirements
-        false
-    }
-
-    pub fn is_ioc(&self) -> bool {
-        // Implement based on your application's requirements
-        // For example, you might have an `order_type` field that you compare:
-        // self.order_type == OrderType::IOC
-        false
-    }
-
     pub fn hidden_quantity(&self) -> u64 {
         if self.leaves_quantity > self.max_visible_quantity {
             self.leaves_quantity - self.max_visible_quantity
@@ -215,43 +176,27 @@ impl Order {
     }
 }
 
-#[derive(PartialEq)]
-pub struct OrderNode<'a> {
-    // Nullable reference to Level
-    pub order: Order,
-    pub id: u64,
-    pub symbol_id: u64,
-    pub slippage: u64,
-    pub price: u64,
-    pub quantity: u64, 
-    pub leaves_quantity: u64,
-    pub executed_quantity: u64,
-    pub hidden_quantity: u64,
-    pub visible_quantity: u64,
-    pub level_node: Option<RcNode<'a>>,
-    pub order_type: OrderType,
-    pub stop_price: u64,
-    pub time_in_force: TimeInForce,
-}
-
-impl OrderNode<'_> {
+impl Order<'_> {
     // Corresponds to the C++ constructor that accepts an Order
     pub fn new(order: Order) -> Self {
         Self {
             id: todo!(),
+            level_node: todo!(),
             symbol_id: todo!(),
-            slippage: todo!(),
+            order_type: todo!(),
+            order_side: todo!(),
             price: todo!(),
+            stop_price: todo!(),
             quantity: todo!(),
-            leaves_quantity: todo!(),
             executed_quantity: todo!(),
+            leaves_quantity: todo!(),
             hidden_quantity: todo!(),
             visible_quantity: todo!(),
-            order_type: todo!(),
-            stop_price: todo!(),
             time_in_force: todo!(),
-            order: todo!(),
-            level_node: todo!(),
+            max_visible_quantity: todo!(),
+            slippage: todo!(),
+            trailing_distance: todo!(),
+            trailing_step: todo!(),
         }
     }
     pub fn is_limit(&self) -> bool {
@@ -299,8 +244,8 @@ impl OrderNode<'_> {
         matches!(self.order_type, OrderType::TrailingStopLimit)
     }
 
-    // Returns a mutable reference to the next OrderNode
-    pub fn next_mut(&self) -> Option<&mut OrderNode> {
+    // Returns a mutable reference to the next Order
+    pub fn next_mut(&self) -> Option<&mut Order> {
         self.next_mut()
     }
 

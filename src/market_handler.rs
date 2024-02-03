@@ -1,20 +1,19 @@
 
-use std::{borrow::Borrow, ops::Deref};
+use std::{borrow::Borrow, ops::{Deref, DerefMut}};
 
-use crate::{order_book::order_book::{OrderBook}, orders::order::{OrderNode, Order}, levels::level::{Level, UpdateType}};
+use crate::{order_book::order_book::{OrderBook}, orders::order::{Order}, levels::level::{Level, UpdateType}};
 
 pub trait Handler {
-    // Assuming 'Order', 'OrderBook', 'Update', and 'OrderNode' are types defined elsewhere
+    // Assuming 'Order', 'OrderBook', 'Update', and 'Order' are types defined elsewhere
     fn on_execute_order(order: &Order, price: u64, leaves_quantity: u64);
-    fn on_add_level<'a,  C: Deref<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
-    fn on_update_level<'a,  C: Deref<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
-    fn on_delete_level<'a,  C: Deref<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
-    fn on_update_order_book<'a,  C: Deref<Target = OrderBook<'a>>>(order_book: C,  top: bool);
-    fn on_delete_order_node(order_node: &OrderNode);
+    fn on_add_level<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
+    fn on_update_level<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
+    fn on_delete_level<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
+    fn on_update_order_book<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  top: bool);
+    fn on_delete_order(order: &Order);
     fn on_update_order(order: &Order);
     fn on_delete_unmatched_order(order: &Order);
     fn on_add_order(order: &Order);
-    fn on_delete_order(order: Order);
 }
 
 //impl Handler for MarketHandler {}
@@ -94,16 +93,8 @@ impl<'a> MarketHandler {
         println!("Deleted order: {:?}", order);
     }
 
-    pub fn on_delete_order_node(&self, order_node: &OrderNode) {
-        //println!("Deleted order: {:?}", order_node);
-    }
-
     pub fn on_delete_unmatched_order(&self, order: Order) {
         println!("Deleted order: {:?}", order);
-    }
-
-    pub fn on_add_order_node(&self, order_node: &OrderNode) {
-      //  println!("Added order node: {:?}", order_node);
     }
 
     pub fn on_delete_order_book(&self, order_book: &OrderBook) {
@@ -118,10 +109,6 @@ impl<'a> MarketHandler {
         println!("Executed order: {:?}, Quantity: {}, Price: {}", order, quantity, price);
     }
 
-    pub fn on_execute_order_node(&self, order: Order, quantity: u64, price: u64) {
-        println!("Executed order: {:?}, Quantity: {}, Price: {}", order, quantity, price);
-    }
-
     pub fn on_add_order_book(&self, order_book: &OrderBook) {
       //  println!("Added order book: {:?}", order_book);
         // Implement specific logic for MarketHandler when an order book is added
@@ -133,7 +120,7 @@ impl<'a> MarketHandler {
 
     pub fn on_delete_level<C>(&self, order_book: C, level: &Level, top: bool) 
     where 
-        C: Deref<Target = OrderBook<'a>>
+        C: DerefMut<Target = OrderBook<'a>>
     {
        // println!("Deleted level from order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for deleting a level...
@@ -141,14 +128,14 @@ impl<'a> MarketHandler {
 
     pub fn on_add_level<C>(&self, order_book: C, level: &Level<'a>, top: bool) 
     where 
-        C: Deref<Target = OrderBook<'a>>
+        C: DerefMut<Target = OrderBook<'a>>
     {
       //  println!("Added level to order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for adding a level...
     }
     pub fn on_update_order_book<C>(&self, order_book: C, top: bool) 
     where 
-        C: Deref<Target = OrderBook<'a>>
+        C: DerefMut<Target = OrderBook<'a>>
     {
       //  println!("Updated order book: {:?}, Top: {}", order_book, top);
         // Additional logic for updating the order book...

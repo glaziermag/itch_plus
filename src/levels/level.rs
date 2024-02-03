@@ -2,19 +2,20 @@
 
 use std::{collections::LinkedList, cmp::Ordering};
 
-use orders::order::OrderNode;
+use orders::order::Order;
 
 use crate::orders;
 
 use super::indexing::{LevelNode, RcNode};
 
+#[derive(Debug)]
 pub struct Level<'a> {
     pub price: u64,
     pub tree_node: RcNode<'a>,
     pub total_volume: u64,
     pub hidden_volume: u64,
     pub visible_volume: u64,
-    pub(crate) orders: LinkedList<OrderNode<'a>>,
+    pub(crate) orders: LinkedList<Order<'a>>,
     pub level_type: LevelType,
 }
 
@@ -62,25 +63,25 @@ impl<'a> Level<'a> {
         self.level_type == LevelType::Ask
     }
     
-    pub fn subtract_volumes(mut level: Level, order_node: &OrderNode) {
-        level.total_volume -= order_node.order.leaves_quantity();
-        level.hidden_volume -= order_node.order.hidden_quantity();
-        level.visible_volume -= order_node.order.visible_quantity();
+    pub fn subtract_volumes(mut level: Level, order: &Order) {
+        level.total_volume -= order.leaves_quantity();
+        level.hidden_volume -= order.hidden_quantity();
+        level.visible_volume -= order.visible_quantity();
     }
 
-    pub fn add_volumes(mut level: Level, order_node: &OrderNode) {
-        level.total_volume += order_node.order.leaves_quantity();
-        level.hidden_volume += order_node.order.hidden_quantity();
-        level.visible_volume += order_node.order.visible_quantity();
+    pub fn add_volumes(mut level: Level, order: &Order) {
+        level.total_volume += order.leaves_quantity();
+        level.hidden_volume += order.hidden_quantity();
+        level.visible_volume += order.visible_quantity();
     }
 
-    // pub fn link_order(&self, mut level: Level, order_node: &OrderNode) {
-    //     level.orders.pop_current(&order_node); // push_back for LinkedList
-    //     level.orders += 1;
+    // pub fn link_order(&self, mut level: Level, order: &Order) {
+    //     level.orders.pop_current(&order); // push_back for LinkedList
+    //   
     // }
 
-    pub fn unlink_order(&self, mut level: Level, order_node: &OrderNode) {
-        level.orders.pop_current(&order_node); 
+    pub fn unlink_order(&self, mut level: Level, order: &Order) {
+        level.orders.pop_current(&order); 
     }
 }
 
@@ -167,7 +168,7 @@ impl<'a> Level<'a> {
         }
     }
 
-    pub fn new_from_order_node(price: u64, level_type: LevelType) -> Self {
+    pub fn new_from_order(price: u64, level_type: LevelType) -> Self {
         Level {
             orders: todo!(),
             price,
