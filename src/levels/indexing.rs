@@ -1,50 +1,95 @@
-use std::{cell::RefCell, ops::Deref, rc::Rc};
+use std::{cell::{RefCell, RefMut}, rc::Rc, sync::{Mutex, Arc, MutexGuard}, marker::PhantomData};
+
+//use crate::references::LevelMut;
+
+use crate::order_book::order_book::{Mutable, OrderBook};
 
 use super::level::Level;
 
-pub type RcCell<T> = Rc<RefCell<T>>;
+pub trait Ref<'a>: AccessContents<MutateContents> + 'a {}
 
-pub type RcNode<'a> = RcCell<LevelNode<'a>>;
+pub trait MutableBook<'a>: Mutable<OrderBook<Ref<'a>>> {}
 
-#[derive(PartialEq, Debug)]
-pub struct LevelNode<'a> {
-    pub level: Level<'a>, // Assuming Level is an u64 for simplicity
-    pub parent: Option<RcNode<'a>>,
-    pub left: Option<RcNode<'a>>,
-    pub right: Option<RcNode<'a>>,
+pub trait AccessContents<T> {
+    type Target;
+    fn access(&self) -> Self::Target;
 }
 
-impl<'a> Deref for LevelNode<'a> {
-    type Target = Level<'a>;
+// For Rc<RefCell<T>>irectly access the inner RefCell
+impl<T> AccessContents<T> for Rc<T> {
+    type Target = T;
 
-    fn deref(&self) -> &Self::Target {
-        &self.level
+    fn access(&self) -> Self::Target {
+        *self
     }
 }
 
-pub trait AsDeref<'a> {
-    fn as_deref(&self) -> std::cell::Ref<'_, LevelNode<'a>>;
+// For Arc<Mutex<T>>irectly access the inner Mutex
+impl<T> AccessContents<T> for Arc<T> {
+    type Target = T;
+
+    fn access(&self) -> Self::Target {
+        *self
+    }
+}
+pub trait MutateContents {
+    type Target;
+    // Return a type that allows further operations.
+    fn mutate(&self) -> Self::Target;
 }
 
-impl<'a> AsDeref<'a> for RcNode<'a> {
-    fn as_deref(&self) -> std::cell::Ref<'_, LevelNode<'a>> {
-        self.borrow()
+// For RefCell<T>, return a RefMut<T>
+impl<T> MutateContents for RefCell<T> {
+    type Target<'a> = RefMut<'a, T> where T: 'a;
+
+    fn mutate(&self) -> Self::Target {
+        self.borrow_mut()
     }
 }
 
-pub trait Tree<'a> {
-    fn insert(this_node: RcNode, new_node: RcNode) where Self: Sized;
-    fn get_next_level_node(level_node: RcNode) -> Option<RcNode<'a>>;
-    fn get_next_lower_level(level_node: RcNode) -> Option<RcNode<'a>>;
-    fn get_next_higher_level(level_node: RcNode) -> Option<RcNode<'a>>;
-    fn get(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>>;
-    fn remove(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>>;
-    fn remove_recursive(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>>;
-    fn find_min(node: RcNode<'a>) -> RcNode<'a>;
+// For Mutex<T>, return a MutexGuard<T>
+impl<T> MutateContents for Mutex<T> {
+    type Target<'a> = MutexGuard<'a, T> where T: 'a;
+
+    fn mutate(&self) -> Self::Target {
+        self.lock().expect("Mutex lock failed")
+    }
+}
+
+#[derive()]
+pub struct LevelNode<'a, R>
+where
+    R: Ref<'a>,
+{
+    // LevelMut<'a>
+    pub level: Level<'a, R>, // Assuming Level is an u64 for simplicity
+    pub parent: Option<R>,
+    pub left: Option<R>,
+    pub right: Option<R>,
+    pub(crate) _marker: PhantomData<&'a M>,
+}
+
+pub trait Tree<'a, R> 
+where
+    R: Ref<'a>,
+{
+    fn insert(this_node: Option<R>, new_node: Option<R>) where Self: Sized;
+    fn get_next_level_node(level_node: R) -> Option<R>;
+    fn get_next_lower_level(level_node: R) -> Option<R>;
+    fn get_next_higher_level(level_node: R) -> Option<R>;
+    fn get(node: Option<R>, price: u64) -> Option<R>;
+    fn remove(node: Option<R>, price: u64) -> Option<R>;
+    fn remove_recursive(node: Option<R>, price: u64) -> Option<R>;
+    fn find_min(node: A) -> A;
 }
 
 // Helper function to find the minimum node starting from a given node
-fn find_min<'a, T: Tree<'a>>(node: RcNode<'a>) -> RcNode<'a> {
+fn find_min<'a, B, T>(node: T) -> T 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
     let mut current = node;
     while let Some(left) = current.borrow().left.clone() {
         current = left;
@@ -52,7 +97,12 @@ fn find_min<'a, T: Tree<'a>>(node: RcNode<'a>) -> RcNode<'a> {
     current
 }
 
-fn get<'a, T: Tree<'a>>(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
+fn get<'a, T,  B>(node: Option<R>, price: u64) -> Option<R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
     let mut current = node;
     while let Some(node) = current {
         let borrowed_node = node.borrow();
@@ -62,13 +112,17 @@ fn get<'a, T: Tree<'a>>(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'
         } else if price > node_price {
             current = borrowed_node.right;
         } else {
-            return Some(node);
+            return current;
         }
     }
     None
 }
 
-fn remove<'a, T: Tree<'a>>(mut node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
+fn remove<'a, B, R>(mut node: Option<R>, price: u64) -> Option<R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R> 
+{
     // This is a placeholder implementation and may need adjustments
     // based on the specific requirements of your binary tree.
     // For example, you might need to handle rebalancing the tree
@@ -79,7 +133,12 @@ fn remove<'a, T: Tree<'a>>(mut node: Option<RcNode<'a>>, price: u64) -> Option<R
     node.clone()
 }
 
-fn remove_recursive<'a, T: Tree<'a>>(node: Option<RcNode<'a>>, price: u64) -> Option<RcNode<'a>> {
+fn remove_recursive<'a, T, B>(node: Option<R>, price: u64) -> Option<R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
     let node = match node {
         Some(n) => n,
         None => return None,
@@ -108,7 +167,12 @@ fn remove_recursive<'a, T: Tree<'a>>(node: Option<RcNode<'a>>, price: u64) -> Op
     Some(node)
 }
 
-fn insert<T: for<'a> Tree<'a>>(this_node: RcNode, new_node: RcNode) {
+fn insert<'a, T, B>(this_node: Option<R>, new_node: Option<R>) 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
 
     if new_node.borrow().price < this_node.borrow().price {
         if let Some(left) = this_node.borrow().left {
@@ -127,7 +191,12 @@ fn insert<T: for<'a> Tree<'a>>(this_node: RcNode, new_node: RcNode) {
     }
 }
 
-fn get_next_level_node<'a, T: Tree<'a>>(level_node: RcNode) -> Option<RcNode<'a>> {
+fn get_next_level_node<'a, T, B>(level_node: R) -> Option<R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
     if (*level_node).borrow().level.is_bid() {
         // For a bid, find the next lower level
         T::get_next_lower_level(level_node)
@@ -137,7 +206,12 @@ fn get_next_level_node<'a, T: Tree<'a>>(level_node: RcNode) -> Option<RcNode<'a>
     }
 }
 
-fn get_next_lower_level<'a>(mut level_node: RcNode) -> Option<RcNode<'a>> {
+fn get_next_lower_level<'a, T, B>(mut level_node: R) -> Option<R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
     
     if let Some(left_child) = level_node.borrow().left {
         // If there is a left child, go left and then as far right as possible
@@ -157,7 +231,12 @@ fn get_next_lower_level<'a>(mut level_node: RcNode) -> Option<RcNode<'a>> {
     Some(level_node)
 }
 
-fn get_next_higher_level<'a>(mut level_node: RcNode) -> Option<RcNode<'a>> {
+fn get_next_higher_level<'a, T, B>(mut level_node: R) -> Option<R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>, 
+{
 
     if let Some(right_child) = level_node.borrow().right {
         // If there is a right child, go right and then as far left as possible
@@ -179,12 +258,18 @@ fn get_next_higher_level<'a>(mut level_node: RcNode) -> Option<RcNode<'a>> {
 
 
 
-struct InOrderIterator<'a> {
-    stack: Vec<RcNode<'a>>,
-    next_node: Option<RcNode<'a>>,
+struct InOrderIterator<'a, R> 
+where
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>,
+{
+    stack: Vec<T>,
+    next_node: Option<R>,
+    _marker: PhantomData<(&'a D, PhantomData<M>)>,
 }
 
-// impl<'a> LevelNode<'a> {
+// impl<'a> LevelNode<'a, R> {
 //     fn in_order_iterator(&self) -> InOrderIterator<'a> {
 //         let mut iterator = InOrderIterator {
 //             stack: VeB::new(),
@@ -195,7 +280,7 @@ struct InOrderIterator<'a> {
 //     }
 // }
 
-impl<'a> InOrderIterator<'a> {
+impl<'a, B: MutableBook<'a, M, R> InOrderIterator<'a, R> {
     fn move_to_leftmost(&mut self) {
         while let Some(node) = self.next_node.clone() {
             self.stack.push(node.clone());
@@ -204,8 +289,8 @@ impl<'a> InOrderIterator<'a> {
     }
 }
 
-impl<'a> Iterator for InOrderIterator<'a> {
-    type Item = RcNode<'a>;
+impl<'a, B: MutableBook<'a>, R: Ref<'a>, T: Tree<'a, R>> Iterator for InOrderIterator<'a, R> {
+    type Item = A;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(node) = self.stack.pop() {

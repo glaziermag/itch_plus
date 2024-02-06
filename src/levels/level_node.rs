@@ -2,58 +2,58 @@ use std::{cmp::Ordering, cell::RefMut, borrow::Borrow};
 
 use derivative::Derivative;
 
-use super::level::Level;
+use super::{level::Level};
 
 
 #[repr(transparent)]
 #[derive(Derivative)]
 #[derivative(Debug = "transparent")]
-pub struct RawNodePtr<'a>(pub *mut Level<'a>);
+pub struct RawNodePtr<'a, R: Ref<'a>>(pub *mut Level<'a, R>);
 
 
-impl<'a> From<*mut Level<'a>> for RawNodePtr<'a> {
-    fn from(value: *mut Level<'a>) -> Self {
+impl<'a, R: Ref<'a>> From<*mut Level<'a, R>> for RawNodePtr<'a, R> {
+    fn from(value: *mut Level<'a, R>) -> Self {
         Self(value)
     }
 }
 
-impl<'a> From<Level<'a>> for RawNodePtr<'a> {
-    fn from(value: Level<'a>) -> Self {
+impl<'a, R: Ref<'a>> From<Level<'a, R>> for RawNodePtr<'a, R> {
+    fn from(value: Level<'a, R>) -> Self {
         // Convert Level to raw pointer
-        let raw_ptr: *mut Level<'a> = From::from(value);
+        let raw_ptr: *mut Level<'a, R> = From::from(value);
         // Convert raw pointer to RawNodePtr
         From::from(raw_ptr)
     }
 }
 
-impl<'a> From<RefMut<'a, Level<'a>>> for RawNodePtr<'a> {
-    fn from(mut ref_mut: RefMut<'a, Level<'a>>) -> Self {
+impl<'a, R: Ref<'a>> From<RefMut<'a, Level<'a, R>>> for RawNodePtr<'a, R> {
+    fn from(mut ref_mut: RefMut<'a, Level<'a, R>>) -> Self {
         unsafe {
-            let ptr: *mut Level<'a> = &mut *ref_mut as *mut Level<'a>;
+            let ptr: *mut Level<'a, R> = &mut *ref_mut as *mut Level<'a, R>;
             std::mem::forget(ref_mut); // Prevent RefMut from being dropped
             RawNodePtr(ptr)
         }
     }
 }
 
-impl<'a> std::ops::Deref for RawNodePtr<'a> {
-    type Target = Level<'a>;
+impl<'a, R: Ref<'a>> std::ops::Deref for RawNodePtr<'a, R> {
+    type Target = Level<'a, R>;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.0 }
     }
 }
 
-impl<'a> Borrow<u64> for RawNodePtr<'a> {
+impl<'a, R: Ref<'a>> Borrow<u64> for RawNodePtr<'a, R> {
     fn borrow(&self) -> &u64 {
         // SAFETY: Ensure this is safe, i.e., self.0 is a valid pointer
         unsafe { &(*self.0).price }
     }
 }
 
-impl<'a> Eq for RawNodePtr<'a> {}
+impl<'a, R: Ref<'a>> Eq for RawNodePtr<'a, R> {}
 
-impl<'a> PartialEq for RawNodePtr<'a> {
+impl<'a, R: Ref<'a>> PartialEq for RawNodePtr<'a, R> {
     fn eq(&self, other: &Self) -> bool {
         let this = &**self;
         let other = &**other;
@@ -61,7 +61,7 @@ impl<'a> PartialEq for RawNodePtr<'a> {
     }
 }
 
-impl<'a> PartialOrd for RawNodePtr<'a> {
+impl<'a, R: Ref<'a>> PartialOrd for RawNodePtr<'a, R> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let this = &**self;
         let other = &**other;
@@ -69,7 +69,7 @@ impl<'a> PartialOrd for RawNodePtr<'a> {
     }
 }
 
-impl<'a> Ord for RawNodePtr<'a> {
+impl<'a, R: Ref<'a>> Ord for RawNodePtr<'a, R> {
     fn cmp(&self, other: &Self) -> Ordering {
         let this = &**self;
         let other = &**other;
@@ -103,7 +103,7 @@ impl<'a> Ord for RawNodePtr<'a> {
 }
 
 // Implement Drop if necessary
-impl<'a> Drop for RawNodePtr<'a> {
+impl<'a, R: Ref<'a>> Drop for RawNodePtr<'a, R> {
     fn drop(&mut self) {
         // Implement drop logic if needed
     }

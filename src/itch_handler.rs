@@ -25,7 +25,7 @@
 //         Ok(())
 //     }
 
-//     pub fn process_buffer(&self, data: &[u8]) -> io::Result<()> {
+//     pub fn process_buffer(&selfata: &[u8]) -> io::Result<()> {
 //         let mut index = 0;
 //         while index < data.len() {
 //             if self.size == 0 {

@@ -1,19 +1,33 @@
 
-use std::{borrow::Borrow, ops::{Deref, DerefMut}};
+use std::borrow::Borrow;
 
-use crate::{order_book::order_book::{OrderBook}, orders::order::{Order}, levels::level::{Level, UpdateType}};
+use crate::{orders::order::{Order}, levels::{level::{Level, UpdateType}}};
 
-pub trait Handler {
+pub trait Handler<'a, B, R> 
+where
+   // B: MutableBook<'a> + Mut<'a, T>,
+    R: Ref<'a>,
+    B: MutableBook,
+{
     // Assuming 'Order', 'OrderBook', 'Update', and 'Order' are types defined elsewhere
-    fn on_execute_order(order: &Order, price: u64, leaves_quantity: u64);
-    fn on_add_level<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
-    fn on_update_level<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
-    fn on_delete_level<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  update: UpdateType, top: bool);
-    fn on_update_order_book<'a,  C: DerefMut<Target = OrderBook<'a>>>(order_book: C,  top: bool);
-    fn on_delete_order(order: &Order);
-    fn on_update_order(order: &Order);
-    fn on_delete_unmatched_order(order: &Order);
-    fn on_add_order(order: &Order);
+    fn new(
+        max_symbols: u64,
+        max_order_books: u64,
+        max_order_book_levels: u64,
+        max_order_book_orders: u64,
+        max_orders: u64
+    ) -> Self;
+    fn on_execute_order(order: &Order<R>, price: u64, leaves_quantity: u64);
+    fn on_add_level(order_book: B,  update: UpdateType, top: bool);
+    fn on_update_level(order_book: B, update: UpdateType, top: bool);
+    fn on_delete_level(order_book: B, update: UpdateType, top: bool);
+    fn on_update_order_book(order_book: B,  top: bool);
+    fn on_delete_order(order: &Order<R>);
+    fn on_update_order(order: &Order<R>);
+    fn on_delete_unmatched_order(order: &Order<R>);
+    fn on_add_order(order: &Order<R>);
+    fn on_delete_order_book(&self, order_book: B);
+    fn on_add_order_book(&self, order_book: B);
 }
 
 //impl Handler for MarketHandler {}
@@ -55,8 +69,8 @@ impl Default for MarketHandler {
     }
 }
 
-impl<'a> MarketHandler {
-    pub fn new(
+impl<'a, B> Handler<'_,  B> for MarketHandler {
+    fn new(
         max_symbols: u64,
         max_order_books: u64,
         max_order_book_levels: u64,
@@ -80,7 +94,7 @@ impl<'a> MarketHandler {
         }
     }
     
-    pub fn on_add_order(&mut self, order: Order) {
+    fn on_add_order(&mut self, order: Order<R>) {
 
         self.updates += 1;
         self.orders += 1;
@@ -89,53 +103,53 @@ impl<'a> MarketHandler {
 
     }
     
-    pub fn on_delete_order(&self, order: Order) {
+    fn on_delete_order(&self, order: &Order<R>) {
         println!("Deleted order: {:?}", order);
     }
 
-    pub fn on_delete_unmatched_order(&self, order: Order) {
+    fn on_delete_unmatched_order(&self, order: &Order<R>) {
         println!("Deleted order: {:?}", order);
     }
 
-    pub fn on_delete_order_book(&self, order_book: &OrderBook) {
+    fn on_delete_order_book(&self, order_book: B) {
        // println!("Deleted order book: {:?}", order_book);
     }
 
-    pub fn on_update_order(&self, order: &Order) {
+    fn on_update_order(&self, order: &Order<R>) {
         println!("Order Updated: {:?}", order);
     }
 
-    pub fn on_execute_order(&self, order: &Order, quantity: u64, price: u64) {
+    fn on_execute_order(&self, order: &Order<R>, quantity: u64, price: u64) {
         println!("Executed order: {:?}, Quantity: {}, Price: {}", order, quantity, price);
     }
 
-    pub fn on_add_order_book(&self, order_book: &OrderBook) {
+    fn on_add_order_book(&self, order_book: B) {
       //  println!("Added order book: {:?}", order_book);
         // Implement specific logic for MarketHandler when an order book is added
     }
-    pub fn on_update_level<C>(&self, order_book: C, level: &Level, top: bool) {
+    fn on_update_level<C>(&self, order_book: B, level: &Level<R>, top: bool) {
      //   println!("Updated level in order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for updating a level...
     }
 
-    pub fn on_delete_level<C>(&self, order_book: C, level: &Level, top: bool) 
+    fn on_delete_level<C>(&self, order_book: B, level: &Level<R>, top: bool) 
     where 
-        C: DerefMut<Target = OrderBook<'a>>
+        B: MutableBook<'a>,
     {
        // println!("Deleted level from order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for deleting a level...
     }
 
-    pub fn on_add_level<C>(&self, order_book: C, level: &Level<'a>, top: bool) 
+    fn on_add_level<C>(&self, order_book: B, level: &Level<R>, top: bool) 
     where 
-        C: DerefMut<Target = OrderBook<'a>>
+        B: MutableBook<'a>,
     {
       //  println!("Added level to order book: {:?}, Level: {:?}, Top: {}", order_book, level, top);
         // Additional logic for adding a level...
     }
-    pub fn on_update_order_book<C>(&self, order_book: C, top: bool) 
+    fn on_update_order_book<C>(&self, order_book: B, top: bool) 
     where 
-        C: DerefMut<Target = OrderBook<'a>>
+        B: MutableBook<'a>,
     {
       //  println!("Updated order book: {:?}, Top: {}", order_book, top);
         // Additional logic for updating the order book...

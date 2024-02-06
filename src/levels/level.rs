@@ -1,37 +1,84 @@
 
 
-use std::{collections::LinkedList, cmp::Ordering};
+use std::{collections::LinkedList, cmp::Ordering, sync::Arc, rc::Rc, marker::PhantomData};
 
 use orders::order::Order;
 
 use crate::orders;
 
-use super::indexing::{LevelNode, RcNode};
+use super::indexing::Ref;
+
+pub trait LevelOps<'a, R: Ref<'a>> {
+    fn subtract_volumes(level: &mut Level<'a, R>, order: &Order<R>);
+    fn unlink_order(level: &mut Level<'a, R>, order: &Order<R>);
+    fn link_order(level: &mut Level<'a, R>, order: &Order<R>);
+    fn add_volumes(level: &mut Level<'a, R>, order: &Order<R>);
+}
+
+// pub trait LevelMut<'a>: for<> DerefMut<Target = Level<'a, R>> {}
+
+// impl<'a> LevelMut<'_> for &mut Level<'_, R> {}
+
+// pub trait OrderRef<'a>: Deref<Target = Order<'a, R>> + AsRef<Order<'a, R>> {}
+
+pub trait Mut<T> {}
+
+impl<T> Mut<T> for & mut T {}
+
+pub trait Count<T> {}
+
+impl<T> Count<T> for Arc<T> {}
+
+impl<T> Count<T> for Rc<T> {}
+
+
+impl<'a, R: Ref<'a>> LevelOps<'a, R> for Level<'_, R> {
+    fn subtract_volumes(level: &mut Level<'a, R>, order: &Order<R>) {
+        level.total_volume -= order.leaves_quantity();
+        level.hidden_volume -= order.hidden_quantity();
+        level.visible_volume -= order.visible_quantity();
+    }
+    fn add_volumes(level: &mut Level<'a, R>, order: &Order<R>) {
+        level.total_volume += order.leaves_quantity();
+        level.hidden_volume += order.hidden_quantity();
+        level.visible_volume += order.visible_quantity();
+    }
+    fn unlink_order(level: &mut Level<'a, R>, order: &Order<R>) {
+        level.orders.pop_current(order); 
+    }
+    fn link_order(level: &mut Level<'a, R>, order: &Order<R>) {
+        todo!()
+    }
+}
 
 #[derive(Debug)]
-pub struct Level<'a> {
+pub struct Level<'a, R> 
+where
+    R: Ref<'a>,
+{
     pub price: u64,
-    pub tree_node: RcNode<'a>,
     pub total_volume: u64,
     pub hidden_volume: u64,
     pub visible_volume: u64,
-    pub(crate) orders: LinkedList<Order<'a>>,
+    pub(crate) orders: LinkedList<Order<'a, R>>,
     pub level_type: LevelType,
+    pub(crate) _marker: PhantomData<&'a M>
 }
 
-impl<'a> From<Level<'a>> for LevelNode<'a> {
-    fn from(level: Level<'a>) -> Self {
+impl<'a, R: Ref<'a>> From<Level<'a, R>> for LevelNode<'a, R> {
+    fn from(level: Level<'a, R>) -> Self {
         LevelNode {
             level,
             parent: None,
             left: None,
             right: None,
+            _marker: PhantomData,
         }
     }
 }
 
 
-impl<'a> Level<'a> {
+impl<'a, R: Ref<'a>> Level<'a, R> {
     /// Creates a new `Level` instance.
     /// 
     /// The method returns `Pin<Box<Self>>` because `Level` instances might contain
@@ -47,7 +94,7 @@ impl<'a> Level<'a> {
             visible_volume: 0, // Default value
             orders: LinkedList::new(), // Initialize with an empty LinkedList
             level_type,
-            tree_node: todo!(), // Default value
+            _marker: PhantomData, // Default value
             // parent: None,   // No parent initially
             // left: None,     // No left child initially
             // right: None,    // No right child initially
@@ -63,26 +110,17 @@ impl<'a> Level<'a> {
         self.level_type == LevelType::Ask
     }
     
-    pub fn subtract_volumes(mut level: Level, order: &Order) {
-        level.total_volume -= order.leaves_quantity();
-        level.hidden_volume -= order.hidden_quantity();
-        level.visible_volume -= order.visible_quantity();
-    }
 
-    pub fn add_volumes(mut level: Level, order: &Order) {
+    pub fn add_volumes(mut level: Level<R>, order: &Order<R>) {
         level.total_volume += order.leaves_quantity();
         level.hidden_volume += order.hidden_quantity();
         level.visible_volume += order.visible_quantity();
     }
 
-    // pub fn link_order(&self, mut level: Level, order: &Order) {
-    //     level.orders.pop_current(&order); // push_back for LinkedList
+    // pub fn link_order(&self, mut level: Level<R>, order: &Order<R>) {
+    //     level.orders.pop_current(&Order<R>); // push_back for LinkedList
     //   
     // }
-
-    pub fn unlink_order(&self, mut level: Level, order: &Order) {
-        level.orders.pop_current(&order); 
-    }
 }
 
 
@@ -92,26 +130,29 @@ pub enum UpdateType {
     Delete,
 }
 
-pub struct LevelUpdate<'a> {
+pub struct LevelUpdate<'a, R> 
+where
+    R: Ref<'a>,
+{
     pub(crate)update_type: UpdateType,
-    pub(crate)update: Level<'a>, 
+    pub(crate)update: Level<'a, R>, 
     pub(crate)top: bool,
 }
 
-pub trait PopCurrent <T>{
-    fn pop_current(&mut self, value: &T) -> Option<T>;
+pub trait PopCurrent <T, A>{
+    fn pop_current(&mut self, value: &T) -> Option<R>;
 }
 
 
-impl<'a> From<Level<'a>> for *mut Level<'a> {
-    fn from(value: Level<'a>) -> Self {
+impl<'a, R: Ref<'a>> From<Level<'a, R>> for *mut Level<'a, R> {
+    fn from(value: Level<'a, R>) -> Self {
         Box::into_raw(Box::new(value))
     }
 }
 
 
-impl<T: PartialEq> PopCurrent<T> for LinkedList<T> {
-    fn pop_current(&mut self, value: &T) -> Option<T> {
+impl<T: PartialEq, A> PopCurrent<T, A> for LinkedList<T> {
+    fn pop_current(&mut self, value: &T) -> Option<R> {
         let mut new_list = LinkedList::new();
         let mut removed_item = None;
 
@@ -134,25 +175,25 @@ pub enum LevelType {
 }
 
 
-impl<'a> PartialEq for Level<'a> {
+impl<'a, R: Ref<'a>> PartialEq for Level<'a, R> {
     fn eq(&self, other: &Self) -> bool {
         // Defer to Level's implementation of PartialEq
         self.price.eq(&other.price)
     }
 }
 
-impl<'a> Eq for Level<'a> {}
+impl<'a, R: Ref<'a>> Eq for Level<'a, R> {}
 
-impl<'a> PartialOrd for Level<'a> {
+impl<'a, R: Ref<'a>> PartialOrd for Level<'a, R> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         // Defer to Level's implementation of PartialOrd
         self.price.partial_cmp(&other.price)
     }
 }
 
-impl<'a> Level<'a> {
+impl<'a, R: Ref<'a>> Level<'a, R> {
 
-    pub fn new_as_ptr(price: u64, level: Level<'a>, parent: Level<'a>) -> Self {
+    pub fn new_as_ptr(price: u64, level: Level<'a, R>, parent: Level<'a, R>) -> Self {
         Level {
             orders: todo!(),
             price,
@@ -160,7 +201,7 @@ impl<'a> Level<'a> {
             hidden_volume: todo!(),
             visible_volume: todo!(),
             level_type: todo!(),
-            tree_node: todo!(),
+            _marker: PhantomData,
             // parent: todo!(),
             // left: todo!(),
             // right: todo!(),
@@ -176,7 +217,7 @@ impl<'a> Level<'a> {
             hidden_volume: todo!(),
             visible_volume: todo!(),
             level_type,
-            tree_node: todo!(),
+            _marker: PhantomData,
             // parent: todo!(),
             // left: todo!(),
             // right: todo!(),

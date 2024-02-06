@@ -1,52 +1,70 @@
 
 
-use std::{ops::DerefMut, cmp::min};
+use std::{cmp::min};
 
-use crate::{order_book::order_book::{OrderBook, OrderBookOperations}, levels::{indexing::{Tree, RcNode}, level::LevelUpdate}, orders::{order::{Order, ErrorCode, TimeInForce, OrderType}, orders::{OrderOps, Orders}}, market_handler::Handler};
+use crate::{order_book::order_book::{OrderBook, OrderBookOperations, Mutable}, levels::{indexing::{Tree, AccessContents, MutateContents, Ref, MutableBook}, level::LevelUpdate}, orders::{order::{Order, ErrorCode, TimeInForce, OrderType}, orders::{Orders, OrderOps}}, market_handler::Handler};
 
 use super::order_book_operations::{OrderBookContainer, OBMap};
 
-pub trait Execution<'a, C: DerefMut<Target = OrderBook<'a>>> {
-    fn activate_stop_order(order_book: C, order: &Order) -> bool;
-    fn activate_stop_limit_order(order_book: C, order: &mut Order) -> bool;
-    fn reduce_order(order_book: C, order_id: u64, quantity: u64, hidden: bool, visible: bool) -> Option<RcNode<'a>>;
-    fn match_order(order_book: C, order: Order);
-    fn remove_order(orders: Orders, id: u64);
-    fn calculate_matching_chain_single_level(order_book: C, level_node: Option<RcNode>, price: u64, leaves_quantity: u64) -> u64;
-    fn calculate_matching_chain_cross_levels(order_book: C, bid_level_node: Option<RcNode>, ask_level_node: Option<RcNode>) -> u64;
-    fn execute_matching_chain(order_book: C, level_node: Option<RcNode>, price: u64, chain: u64);
-    fn delete_order_recursive(executing_order_id: u64, flag1: bool, flag2: bool);
-    fn activate_stop_orders_level(node: Option<RcNode>, stop_price: u64);
-    fn activate_stop_orders(order_book: C) -> bool;
-    fn recalculate_trailing_stop_price(order_book: C, best_ask_or_bid: Option<RcNode>);
-    fn activate_individual_stop_orders(order_book: C, stop_level_node: Option<RcNode>, market_price: u64, orders: Orders) -> bool;
-    fn match_market(order_book: C, order: &Order);
-    fn match_limit(order_book: C, order: &Order);
-    fn update_level(order_book: C, level_node: LevelUpdate);
-    fn match_order_book<H: Handler>(order_book: C);
-    fn add_market_order<H: Handler>(order_books: OBMap<'a, C>, order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
-    fn add_limit_order<H: Handler>(order: Order, matching: bool, order_books: OBMap<'a, C>,recursive: bool) -> Result<(), ErrorCode>;
-    fn add_stop_order<H: Handler, O: OrderOps>(orders: Orders, order_books: OBMap<'a, C>, order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
-    fn add_stop_limit_order<H: Handler, O: OrderOps>(order_books: OBMap<'a, C>, orders: Orders, order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
-    fn modify_order(id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool, flag3: bool) -> Result<(), ErrorCode>;
+pub trait Execution<'a, B, H, O, T> 
+where
+    B: MutableBook<'a>,
+    R: Ref<'a>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    T: Tree<'a, R>
+{
+    fn activate_stop_order(order_book: B, order: &Order<R>) -> bool;
+    fn activate_stop_limit_order(order_book: B, order: &mut Order<R>) -> bool;
+    fn reduce_order(order_book: B, order_id: u64, quantity: u64, hidden: bool, visible: bool) -> Option<R>;
+    fn match_order(order_book: B, order: Order<R>);
+    fn calculate_matching_chain_single_level(order_book: B, level_node: Option<R>, price: u64, leaves_quantity: u64) -> u64;
+    fn calculate_matching_chain_cross_levels(order_book: B, bid_level_node: Option<R>, ask_level_node: Option<R>) -> u64;
+    fn execute_matching_chain(order_book: B, level_node: Option<R>, price: u64, chain: u64);
+    fn activate_stop_orders(order_book: B) -> bool;
+    fn recalculate_trailing_stop_price(order_book: B, best_ask_or_bid: Option<R>);
+    fn activate_individual_stop_orders(order_book: B, stop_level_node: Option<R>, market_price: u64, orders: Orders<'a, B>) -> bool;
+    fn match_market(order_book: B, order: &Order<R>);
+    fn match_limit(order_book: B, order: &Order<R>);
+    fn update_level(order_book: B, level_node: LevelUpdate<R>);
+    fn match_order_book(order_book: B);
+    fn add_limit_order(order: Order<R>, matching: bool, order_books: OBMap<'a, R, T>,recursive: bool) -> Result<(), ErrorCode>;
+    fn add_stop_limit_order(order_books: OBMap<'a, R, T>, orders: Orders<'a, B>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
+    fn update_level_on_reduction(order_book: B, order: Order<R>, quantity: u64, hidden: u64, visible: u64);
+    //fn link_order(level_node: Option<R>, order: Order<R>);
+    fn reduce_trailing_stop_order<B>(order_book: B, order: &Order<R>, quantity: u64, hidden: u64, visible: u64);
+    fn get_order(orders: Orders< B>, id: u64) -> Result<Order<'a, R>, ErrorCode>;
     fn replace_order_internal(id: u64, new_id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool) -> Result<(), ErrorCode>;
-    fn get_order(orders: Orders, id: u64) -> Result<Order<'a>, ErrorCode>;
-    fn update_level_on_reduction(order_book: C, order: Order, quantity: u64, hidden: u64, visible: u64);
-    fn subtract_level_volumes(level_node: Option<RcNode>, order: &Order);
-    fn unlink_order(level_node: Option<RcNode>, order: Order);
-    fn link_order(level_node: Option<RcNode>, order: Order);
-    fn reduce_trailing_stop_order<B>(order_book: C, order: &Order, quantity: u64, hidden: u64, visible: u64);
+    fn modify_order(id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool, flag3: bool) -> Result<(), ErrorCode>;
+    fn delete_order_recursive(executing_order_id: u64, flag1: bool, flag2: bool);
+    fn activate_stop_orders_level(node: Option<R>, stop_price: u64);
+    fn add_stop_order(orders: Orders< B>, order_books: OBMap<'a, R, T>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
+    fn remove_order(orders: Orders< B>, id: u64);
+    fn add_market_order(order_books: OBMap<'a, R, T>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
 }
+
+// pub trait Internals<'a, B: MutableBook<'a>,>: Execution<'a, B, H, O, T> {
+//     fn get_order(orders: Orders< B>, id: u64) -> Result<Order<'a, R>, ErrorCode>;
+//     fn replace_order_internal(id: u64, new_id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool) -> Result<(), ErrorCode>;
+//     fn modify_order(id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool, flag3: bool) -> Result<(), ErrorCode>;
+//     fn delete_order_recursive(executing_order_id: u64, flag1: bool, flag2: bool);
+//     fn activate_stop_orders_level(node: Option<R>, stop_price: u64);
+//     fn add_stop_order<H: Handler<'a, B>, O: OrderOps>(orders: Orders< B>, order_books: OBMap<'a, R, T>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
+//     fn remove_order(orders: Orders< B>, id: u64);
+//     fn add_market_order<H: Handler>(order_books: OBMap<'a, R, T>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
+// }
 
 pub struct MarketExecutor;
 
-pub fn add_order<'a, E, H, O, C, OC>(orders: Orders, order_books: OBMap<'a, C>, order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_order<'a, E, H, O, OC, R, T>(orders: Orders<'a, B>, order_books: OBMap<'a, R, T>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    H: Handler,
-    O: OrderOps,
-    OC: OrderBookContainer<'a, C>
+    E: Execution<'a, B, H>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    OC: OrderBookContainer<'a, B, H, T>,
+    T: Tree<'a, R>
 {
     order.validate();
     // let some_condition = true;
@@ -76,15 +94,16 @@ where
     }
 }
 
-pub fn add_market_order<'a, C, E, H, B, T, O, OC>(order_book: C, order_books: OBMap<'a, C>, order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+
+pub fn add_market_order<'a, E, H, B, T, O, R, OC>(order_book: B, order_books: OBMap<'a, R, T>, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     let mut order_book = OC::get_order_book(order_books, &order.symbol_id).expect("order book not found");
 
@@ -111,16 +130,16 @@ where
     Ok(())
 }
 
-
-pub fn execute_matching_chain<'a, E, H, T, C, O, B, OC>(order_book: C, mut level_node: Option<RcNode>, price: u64, mut volume: u64) 
+pub fn execute_matching_chain<'a, E, H, T, O, B, R, OC>(order_book: B, mut level_node: Option<R>, price: u64, mut volume: u64) 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // the overhead of ref counting and whatnot not really needed except for the tree integrity it seems
     while volume > 0 {
@@ -163,29 +182,31 @@ where
     }
 }
 
-pub fn match_limit<'a, E, C, T, H, O, B, OC>(order_book: C, order: Order) 
+pub fn match_limit<'a, E, T, H, O, B, R, OC>(order_book: B, order: Order<R>) 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // Match the limit order
     E::match_order(order_book, order);
 }
 
-pub fn match_market<'a, E, C, T, H, O, B, OC>(mut order_book: C, mut order: Order) -> Result<(), ErrorCode> 
+pub fn match_market<'a, E, T, H, O, B, R, OC>(mut order_book: B, mut order: Order<R>) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // Calculate acceptable market order price with optional slippage value
     match order.order_type {
@@ -202,17 +223,18 @@ where
     Ok(())
 }
 
-pub fn match_order<'a, E, H, C, T, O, B, OC>(mut order_book: C, mut order: Order) 
+pub fn match_order<'a, E, H, T, O, B, R, OC>(mut order_book: B, mut order: Order<R>) 
 where
-    E: Execution<'a, C>,
-    H: Handler,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
-    let level_node: Option<RcNode>;
+    let level_node: Option<R>;
     let arbitrage = if order.is_buy() {
         level_node = B::best_ask(order_book);
         order.price >= (*level_node.expect("best ask not retrieved").borrow()).price
@@ -292,22 +314,23 @@ where
         
         // Move to the next order to execute at the same price level
         if let Some(node) = next_executing_order {
-            executing_order = Some(&node);
+            executing_order = Some(node);
         } else {
             break;
         }
     }   
 }
 
-pub fn match_order_book<'a, E, H, C, O, T, B, OC>(order_book: C)
+pub fn match_order_book<'a, E, H, O, T, B, R, OC>(order_book: B)
 where
-    E: Execution<'a, C>,
-    H: Handler,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     loop {
         // Check if the best bid price is higher than or equal to the best ask price
@@ -403,15 +426,16 @@ where
 
 extern crate generational_arena;
 
-fn calculate_matching_chain_single_level<'a, T, C, E, H, O, B, OC>(mut order_book: C, mut level_node: Option<RcNode>, price: u64, volume: u64) -> u64 
+fn calculate_matching_chain_single_level<'a, T, E, H, O, B, R, OC>(mut order_book: B, mut level_node: Option<R>, price: u64, volume: u64) -> u64 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     let mut available = 0;
     // avoid panics later
@@ -477,15 +501,16 @@ where
     0
 }
 
-fn calculate_matching_chain_cross_levels<'a, C, T, E, H, O, B, OC>(mut order_book: C, bid_level: RcNode, ask_level: RcNode) -> u64 
+fn calculate_matching_chain_cross_levels<'a, T, E, H, O, B, R, OC>(mut order_book: B, bid_level: A, ask_level: A) -> u64 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     let mut longest_level_handle = bid_level;
     let mut shortest_level_handle = ask_level;
@@ -563,15 +588,16 @@ where
     0
 }
 
-pub fn add_stop_order<'a, E, C, T, H, O, B, OC>(orders: Orders, order_books: OBMap<'a, C>, mut order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_stop_order<'a, E, T, H, O, B, R, OC>(orders: Orders<'a, B>, order_books: OBMap<'a, R, T>, mut order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // remove panicking behavior from code
     let mut order_book = OC::get_order_book(order_books, &order.symbol_id).expect("order book not found");
@@ -630,7 +656,7 @@ where
         if order.is_trailing_stop() || order.is_trailing_stop_limit() {
             B::add_trailing_stop_order(order_book, &order)
         } else {
-            B::add_stop_order(order_book,&order)
+            B::add_stop_order(order_book, &order)
         }
     } else {
         H::on_delete_order(&order);
@@ -645,15 +671,14 @@ where
     Ok(())
 }
 
-pub fn add_stop_limit_order<'a, E, C, T, H, O, B, OC>(order_books: OBMap<'a, C>, orders: Orders, mut order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_stop_limit_order<'a, E, H, B, R, OC>(order_books: OBMap<'a, R, T>, orders: Orders<'a, B>, mut order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, H, R,>,
+    OC: OrderBookContainer<'a, B, H>
 {
     // get the valid order book for the order
     let mut order_book = OC::get_order_book(order_books, &order.id).expect("order book not found");
@@ -726,7 +751,7 @@ where
         if O::insert_order(orders, &order.id, order).is_some() {
             // Order duplicate
             H::on_delete_order(&order);
-            // order_pool.release(// order.new(&order));
+            // order_pool.release(// order.new(&Order<R>));
         }
         // Add the new stop order into the order book
         if order.is_trailing_stop() || order.is_trailing_stop_limit() {
@@ -750,15 +775,16 @@ where
 }
 
 
-pub fn execute_order<'a, E, H, C, T, O, B, OC>(orders: Orders, order_book: C, order_books: OBMap<'a, C>, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode> 
+pub fn execute_order<'a, E, H, T, O, B, R, OC>(orders: Orders<'a, B>, order_book: B, order_books: OBMap<'a, R, T>, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     let mut order = E::get_order(orders, id).map_err(|_| ErrorCode::OrderNotFound)?;
 
@@ -807,15 +833,38 @@ where
     Ok(())
 }
 
-pub fn mitigate_order<'a, OC: OrderBookContainer<'a, C>, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>>(id: u64, new_price: u64, new_quantity: u64) -> Result<(), ErrorCode> {
+pub fn mitigate_order<'a, B, E, OC, H, O, T>(id: u64, new_price: u64, new_quantity: u64) -> Result<(), ErrorCode> 
+where
+    R: Ref<'a>,
+    OC: OrderBookContainer<'a, B, H, T>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+{
     E::modify_order(id, new_price, new_quantity, true, true, false)
 }
 
-pub fn replace_order_id<'a,C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>, OC: OrderBookContainer<'a, C>>(symbols: Vec<u64>,id: u64, new_id: u64, new_price: u64, new_quantity: u64) -> Result<(), ErrorCode> {
+pub fn replace_order_id<'a, B, H, O, E, OC, T>(symbols: Vec<u64>,id: u64, new_id: u64, new_price: u64, new_quantity: u64) -> Result<(), ErrorCode> 
+where
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    OC: OrderBookContainer<'a, B, H, T>,
+{
     E::replace_order_internal(id, new_id, new_price, new_quantity, true, false)
 }
 
-pub fn modify_order<'a, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>, OC: OrderBookContainer<'a, C>, O>(mut orders: Orders, id: u64, new_price: u64, new_quantity: u64, mitigate: bool, matching: bool, recursive: bool) -> Result<(), ErrorCode> {
+pub fn modify_order<'a, B, E, OC, H, O, T>(mut orders: Orders<'a, B>, id: u64, new_price: u64, new_quantity: u64, mitigate: bool, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+where
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    OC: OrderBookContainer<'a, B, H, T>,
+{
     if id == 0 {
         return Err(ErrorCode::OrderIdInvalid);
     }
@@ -844,10 +893,10 @@ pub fn modify_order<'a, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>
     // Handle the updated order
     if order.leaves_quantity > 0 {
         // Handle the case where the order is still active
-        // e.g., H::on_update_order(&order);
+        // e.g., H::on_update_order(&Order<R>);
     } else {
         // Handle the case where the order is now fully executed
-        // e.g., H::on_delete_order(&order);
+        // e.g., H::on_delete_order(&Order<R>);
         E::remove_order(orders, id);
     }
 
@@ -860,15 +909,16 @@ pub fn modify_order<'a, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>
     Ok(())
 }
 
-pub fn delete_order_recursive<'a, E, C, T, H, O, B, OC>(id: u64, matching: bool, recursive: bool, order_books: OBMap<'a, C>, orders: Orders) -> Result<(), ErrorCode> 
+pub fn delete_order_recursive<'a, E, T, H, O, B, R, OC>(id: u64, matching: bool, recursive: bool, order_books: OBMap<'a, R, T>, orders: Orders<'a, B>) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // Validate parameters
     if id == 0 {
@@ -916,7 +966,15 @@ where
     Ok(())
 }
 
-pub fn modify_order_volumes<'a, OC: OrderBookContainer<'a, C>, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>, H: Handler, O: OrderOps>(orders: Orders, id: u64, quantity: u64, matching: bool, recursive: bool) -> Result<(), ErrorCode> {
+pub fn modify_order_volumes<'a, OC, E, H, O, R, T>(orders: Orders<'a, B>, id: u64, quantity: u64, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+where
+    OC: OrderBookContainer<'a, B, H, T>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+{
     if id == 0 {
         return Err(ErrorCode::OrderIdInvalid);
     }
@@ -953,15 +1011,16 @@ pub fn modify_order_volumes<'a, OC: OrderBookContainer<'a, C>, C: DerefMut<Targe
     Ok(())
 }
 
-pub fn reduce_order<'a, E, C, T, H, O, B, OC>(order_books: OBMap<'a, C>, mut order: Order, id: u64, quantity: u64, matching: bool, recursive: bool, orders: Orders) -> Result<(), ErrorCode> 
+pub fn reduce_order<'a, E, T, H, O, B, R, OC>(order_books: OBMap<'a, R, T>, mut order: Order<R>, id: u64, quantity: u64, matching: bool, recursive: bool, orders: Orders<'a, B>) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     if id == 0 {
         return Err(ErrorCode::OrderIdInvalid);
@@ -1013,7 +1072,7 @@ where
 
         // Erase the order
         O::remove_order(orders, &id);
-        // Release the order, assuming we have an order pool with a release method
+        // Release the Order<R>, assuming we have an order pool with a release method
         // order_pool.release(order);
     }
 
@@ -1026,15 +1085,16 @@ where
     Ok(())
 }
 
-pub fn replace_order<'a, OC, B, H, O, T, E, C>(order_books: OBMap<'a, C>, orders: Orders, id: u64, order: Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn replace_order<'a, B, H, O, T, E, B, OC>(order_books: OBMap<'a, R, T>, orders: Orders<'a, B>, id: u64, order: Order<R>, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // Delete the previous order by Id
     let order_book = order_books.get(&id).expect("order book not found");
@@ -1045,15 +1105,16 @@ where
     Ok(())
 }
 
-pub fn replace_order_internal<'a, E, C, T, H, O, B, OC>(id: u64, new_id: u64, new_price: u64, new_quantity: u64, matching: bool, recursive: bool, orders: Orders, order_books: OBMap<'a, C>) -> Result<(), ErrorCode> 
+pub fn replace_order_internal<'a, E, T, H, O, B, R, OC>(id: u64, new_id: u64, new_price: u64, new_quantity: u64, matching: bool, recursive: bool, orders: Orders<'a, B>, order_books: OBMap<'a, R, T>) -> Result<(), ErrorCode> 
 where
-    E: Execution<'a, C>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {
     // Validate parameters 
     if id == 0 || new_id == 0 || new_quantity == 0 {

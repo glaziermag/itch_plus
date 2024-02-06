@@ -1,9 +1,8 @@
 use core::fmt;
 
+use crate::levels::indexing::Ref;
 
-use crate::levels::indexing::RcNode;
-
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy)]
 pub enum OrderSide {
     Buy,
     Sell,
@@ -15,7 +14,7 @@ impl Default for OrderSide {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Clone)]
 pub enum OrderType {
     Buy,
     Market,
@@ -32,9 +31,9 @@ impl Default for OrderType {
     }
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(Clone)]
 pub enum TimeInForce {
-    IOC,
+    IOD,
     FOK,
     // Other variants...
 }
@@ -75,8 +74,8 @@ impl From<&'static str> for ErrorCode {
     }
 }
 
-#[derive(PartialEq, Debug)]
-pub struct Order<'a> {
+#[derive()]
+pub struct Order<'a, R: Ref<'a>> {
     pub id: u64,
     pub symbol_id: u64,
     pub order_type: OrderType,
@@ -93,10 +92,10 @@ pub struct Order<'a> {
     pub slippage: u64,
     pub trailing_distance: u64,
     pub trailing_step: u64,
-    pub level_node: Option<RcNode<'a>>,
+    pub level_node: Option<R>,
 }
 
-impl Default for Order<'_> {
+impl<'a, R: Ref<'a>> Default for Order<'_, R> {
     fn default() -> Self {
         Order {
             id: 0,
@@ -120,7 +119,7 @@ impl Default for Order<'_> {
     }
 }
 
-impl Order<'_> {
+impl<'a, R> Order<'a, R> {
 
     pub fn validate(&self) -> Result<(), ErrorCode> {
         // Validate order Id
@@ -176,9 +175,9 @@ impl Order<'_> {
     }
 }
 
-impl Order<'_> {
+impl<'a, R> Order<'_, R> {
     // Corresponds to the C++ constructor that accepts an Order
-    pub fn new(order: Order) -> Self {
+    pub fn new(order: Order<R>) -> Self {
         Self {
             id: todo!(),
             level_node: todo!(),
@@ -245,7 +244,7 @@ impl Order<'_> {
     }
 
     // Returns a mutable reference to the next Order
-    pub fn next_mut(&self) -> Option<&mut Order> {
+    pub fn next_mut(&self) -> Option<&mut Order<R>> {
         self.next_mut()
     }
 

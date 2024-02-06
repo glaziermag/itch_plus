@@ -1,6 +1,7 @@
 
-use std::{ops::DerefMut, rc::Rc, cell::RefCell, ptr, cmp::{max, min}};
-use crate::{levels::{level::{UpdateType, LevelUpdate, Level, LevelType, PopCurrent}, indexing::{RcNode, LevelNode, Tree}}, orders::{order::{Order, ErrorCode, TimeInForce, OrderType}, orders::{OrderOps, Orders}}, market_handler::Handler, market_executors::{executor::Execution, order_book_operations::{OrderBooks, OrderBookContainer, OBMap}}};
+use core::fmt;
+use std::{ops::{ Deref, DerefMut}, rc::Rc, cell::RefCell, ptr, cmp::{max, min}, borrow::{Borrow, BorrowMut}, marker::PhantomData};
+use crate::{levels::{level::{UpdateType, LevelUpdate, Level, LevelType, PopCurrent, LevelOps}, indexing::{Tree, MutableBook}}, orders::{order::{Order, ErrorCode, TimeInForce, OrderType}, orders::{OrderOps, Orders}}, market_handler::Handler, market_executors::{executor::Execution, order_book_operations::{OrderBookContainer, OBMap}}};
 
 #[derive(Debug)]
 pub enum OrderBookError {
@@ -8,247 +9,260 @@ pub enum OrderBookError {
     LevelNotFound,
 }
 
+pub trait Mutable<T>: Deref + Borrow<T> + fmt::Pointer + DerefMut + BorrowMut<T> {}
+
+//impl<T> Mutable<T> for &mut T {}
+
+pub trait Ref<T>: Copy + Clone + Deref + Borrow<T> {}
+
+//impl<T> Ref<T> for &T {}
+
 // Trait defining operations on an OrderBook
-pub trait OrderBookOperations<'a, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>, O: OrderOps, H: Handler, T: Tree<'a>> {
-    fn activate_stop_orders_level(order_book: C, level: Level, stop_price: u64) -> bool;
-    fn delete_stop_level(order_book: C, order: &Order);
-    fn add_stop_level(order_book: C, order: &Order) -> Option<RcNode<'a>>;
-    fn best_sell_stop(order_book: C) -> Option<RcNode<'a>>;
-    fn best_buy_stop(order_book: C) -> Option<RcNode<'a>>;
-    fn reset_matching_price(order_book: C);
-    fn get_market_ask_price(order_book: C) -> u64;
-    fn get_market_bid_price(order_book: C) -> u64;
-    fn update_last_price(order_book: C, order: Order, price: u64);
-    fn update_matching_price(order_book: C, order: Order, price: u64);
-    fn calculate_trailing_stop_price(order_book: C, order: Order) -> u64;
-    fn recalculate_trailing_stop_price(order_book: C, level: Level);
-    fn add_limit_order(orders: Orders, order: Order, matching: bool, order_books: OBMap<'a, C>, recursive: bool) -> Result<(), ErrorCode>;
-    fn add_order(order_book: C, order: &Order) -> LevelUpdate<'a>;
-    fn add_stop_order(order_book: C, order: &Order);
-    fn add_trailing_stop_order(order_book: C, order: &Order);
-    fn reduce_order(order_book: C, order: &'a Order<'a>, quantity: u64, hidden: u64, visible: u64) -> LevelUpdate<'a>; 
-    fn delete_order(order_book: C, order: &'a Order<'a>) -> LevelUpdate<'a>;
-    fn reduce_trailing_stop_order(order_book: C, order: &Order, quantity: u64, hidden: u64, visible: u64);
-    fn delete_trailing_stop_order(order_book: C, order: &Order) -> Result<(), &'static str>;
-    fn get_market_trailing_stop_price_ask(order_book: C) -> u64;
-    fn get_market_trailing_stop_price_bid(order_book: C) -> u64;
-    fn reduce_stop_order(order_book: C, order: &Order<'a>, quantity: u64, hidden_delta: u64, visible_delta: u64);
-    fn get_next_level_node(order_book: C, level_node: RcNode) -> Option<RcNode<'a>>;
-    fn best_trailing_buy_stop(order_book: C) -> Option<RcNode<'a>>;
-    fn best_trailing_sell_stop(order_book: C) -> Option<RcNode<'a>>;
-    fn delete_trailing_stop_level(order_book: C, order: &Order<'a>);
-    fn activate_individual_stop_orders(order_book: C, level_node: Option<RcNode<'a>>, market_price: u64, orders: Orders) -> bool;
-    fn create_and_insert_level(order_book: C, price: u64, level_type: LevelType, tree: T) -> RcNode<'a>;
-    fn best_ask(order_book: C) -> Option<RcNode<'a>>;
-    fn best_bid(order_book: C) -> Option<RcNode<'a>>;
-    fn delete_level(order_book: C, order: &Order);
-    fn is_top_of_book(order_book: C, order: &Order) -> bool;
-    fn subtract_level_volumes(order_book: C, level: RcNode<'a>, order: &Order);
-    fn unlink_order(order_book: C, level: RcNode<'a>, order: &Order);
-    fn link_order(level: Level, order: &Order);
-    fn delete_stop_order(order_book: C, order: &Order); 
-    fn add_level_volumes(order_book: C, level: Level, order: &Order);
-    fn get_next_trailing_stop_level(order_book: C, level_node: RcNode) -> Option<RcNode>; 
-    fn add_level(order_book: C, order: &Order) -> Option<RcNode<'a>>;
-    fn add_trailing_stop_level(order_book: C, order: &Order) -> Option<RcNode<'a>>;
+pub trait OrderBookOperations<'a, B, E, H, R>
+where
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    // Assuming T and U are part of the Execution trait, for example,
+    // you would declare them inside the Execution trait or wherever they are actually used.
+{
+    fn activate_stop_orders_level(order_book: B, level: Level<'a, R>, stop_price: u64) -> bool;
+    fn delete_stop_level(order_book: B, order: &Order<R>);
+    fn add_stop_level(order_book: B, order: &Order<R>) -> Option<R>;
+    fn best_sell_stop(order_book: B) -> Option<R>;
+    fn best_buy_stop(order_book: B) -> Option<R>;
+    fn reset_matching_price(order_book: B);
+    fn get_market_ask_price(order_book: B) -> u64;
+    fn get_market_bid_price(order_book: B) -> u64;
+    fn update_last_price(order_book: B, order: Order<R>, price: u64);
+    fn update_matching_price(order_book: B, order: Order<R>, price: u64);
+    fn calculate_trailing_stop_price(order_book: B, order: Order<R>) -> u64;
+    fn recalculate_trailing_stop_price(order_book: B, level: Level<R>);
+    fn add_limit_order(orders: Orders< B>, order: Order<R>, matching: bool, order_books: OBMap<'a, R, T>, recursive: bool) -> Result<(), ErrorCode>;
+    fn add_order(order_book: B, order: &Order<R>) -> LevelUpdate<'a, R>;
+    fn add_stop_order(order_book: B, order: &Order<R>);
+    fn add_trailing_stop_order(order_book: B, order: &Order<R>);
+    fn reduce_order(order_book: B, order: &'a Order<'a, R>, quantity: u64, hidden: u64, visible: u64) -> LevelUpdate<'a, R>; 
+    fn delete_order(order_book: B, order: &'a Order<'a, R>) -> LevelUpdate<'a, R>;
+    fn reduce_trailing_stop_order(order_book: B, order: &Order<R>, quantity: u64, hidden: u64, visible: u64);
+    fn delete_trailing_stop_order(order_book: B, order: &Order<R>) -> Result<(), &'static str>;
+    fn get_market_trailing_stop_price_ask(order_book: B) -> u64;
+    fn get_market_trailing_stop_price_bid(order_book: B) -> u64;
+    fn reduce_stop_order(order_book: B, order: &Order<'a, R>, quantity: u64, hidden_delta: u64, visible_delta: u64);
+    fn get_next_level_node(order_book: B, level_node: A) -> Option<R>;
+    fn best_trailing_buy_stop(order_book: B) -> Option<R>;
+    fn best_trailing_sell_stop(order_book: B) -> Option<R>;
+    fn delete_trailing_stop_level(order_book: B, order: &Order<'a, R>);
+    fn activate_individual_stop_orders(order_book: B, level_node: Option<R>, market_price: u64, orders: Orders< B>) -> bool;
+    fn create_and_insert_level(order_book: B, price: u64, level_type: LevelType, tree: T) -> T;
+    fn best_ask(order_book: B) -> Option<R>;
+    fn best_bid(order_book: B) -> Option<R>;
+    fn delete_level(order_book: B, order: &Order<R>);
+    fn is_top_of_book(order_book: B, order: &Order<R>) -> bool;
+    fn delete_stop_order(order_book: B, order: &Order<R>); 
+    fn add_volumes(order_book: B, level: Level<'a, R>, order: &Order<R>);
+    fn get_next_trailing_stop_level(order_book: B, level_node: A) -> Option<R>; 
+    fn add_level(order_book: B, order: &Order<R>) -> Option<R>;
+    fn add_trailing_stop_level(order_book: B, order: &Order<R>) -> Option<R>;
 }
 
-impl<'a, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>, O: OrderOps, H: Handler, T: Tree<'a>> OrderBookOperations<'a, C, E, O, H, T> for OrderBook<'a> {
-    fn link_order(level: Level, order: &Order){
+impl<'a, E, O, H, T, M, A, B, R> OrderBookOperations<'a, E, O, H, T, M, A> for OrderBook<'a, R> 
+where
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    R: Ref<'a>,
+    // Assuming T and U are part of the Execution trait, for example,
+    // you would declare them inside the Execution trait or wherever they are actually used.
+{
+
+    fn add_trailing_stop_level(mut order_book: B, order: &Order<R>) -> Option<R> {
         todo!()
     }
-    fn add_trailing_stop_level(mut order_book: C, order: &Order) -> Option<RcNode<'a>> {
+    fn get_next_trailing_stop_level(order_book: B, level_node: A) -> Option<R> {
         todo!()
     }
-    fn get_next_trailing_stop_level(order_book: C, level_node: RcNode) -> Option<RcNode> {
+    fn add_volumes(order_book: B, level: Level<'a, R>, order: &Order<R>) {
         todo!()
     }
-    fn add_level_volumes(order_book: C, level: Level, order: &Order) {
-        todo!()
-    }
-    fn delete_stop_order(order_book: C, order: &Order) {
+    fn delete_stop_order(order_book: B, order: &Order<R>) {
         todo!()
     }
     
-    fn get_market_trailing_stop_price_ask(order_book: C) -> u64 {
+    fn get_market_trailing_stop_price_ask(order_book: B) -> u64 {
         todo!()
     }
 
-    fn get_market_trailing_stop_price_bid(order_book: C) -> u64 {
+    fn get_market_trailing_stop_price_bid(order_book: B) -> u64 {
         todo!()
     }
 
-    fn activate_stop_orders_level(order_book: C, level: Level, stop_price: u64) -> bool {
+    fn activate_stop_orders_level(order_book: B, level: Level<'a, R>, stop_price: u64) -> bool {
         todo!()
     }
 
-    fn delete_stop_level(order_book: C, order: &Order) {
+    fn delete_stop_level(order_book: B, order: &Order<R>) {
         todo!()
     }
 
-    fn add_stop_level(order_book: C, order: &Order) -> Option<RcNode<'a>> {
+    fn add_stop_level(order_book: B, order: &Order<R>) -> Option<R> {
         todo!()
     }
 
-    fn best_sell_stop(order_book: C) -> Option<RcNode<'a>> {
+    fn best_sell_stop(order_book: B) -> Option<R> {
         todo!()
     }
 
-    fn best_buy_stop(order_book: C) -> Option<RcNode<'a>> {
+    fn best_buy_stop(order_book: B) -> Option<R> {
         todo!()
     }
 
-    fn reset_matching_price(order_book: C) {
+    fn reset_matching_price(order_book: B) {
         todo!()
     }
 
-    fn get_market_ask_price(order_book: C) -> u64 {
+    fn get_market_ask_price(order_book: B) -> u64 {
         todo!()
     }
 
-    fn get_market_bid_price(order_book: C) -> u64 {
+    fn get_market_bid_price(order_book: B) -> u64 {
         todo!()
     }
 
-    fn update_last_price(order_book: C, order: Order, price: u64) {
+    fn update_last_price(order_book: B, order: Order<R>, price: u64) {
         todo!()
     }
 
-    fn update_matching_price(order_book: C, order: Order, price: u64) {
+    fn update_matching_price(order_book: B, order: Order<R>, price: u64) {
         todo!()
     }
 
-    fn calculate_trailing_stop_price(order_book: C, order: Order) -> u64 {
+    fn calculate_trailing_stop_price(order_book: B, order: Order<'a, R>) -> u64 {
         todo!()
     }
 
-    fn recalculate_trailing_stop_price(order_book: C, level: Level) {
+    fn recalculate_trailing_stop_price(order_book: B, level: Level<R>) {
         todo!()
     }
 
-    fn add_limit_order(orders: Orders, order: Order, matching: bool, order_books: OBMap<'a, C>, recursive: bool) -> Result<(), ErrorCode> {
+    fn add_limit_order(orders: Orders< B>, order: Order<R>, matching: bool, order_books: OBMap<'a, R, T>, recursive: bool) -> Result<(), ErrorCode> {
         todo!()
     }
 
-    fn add_order(order_book: C, order: &Order) -> LevelUpdate<'a> {
+    fn add_order(order_book: B, order: &Order<R>) -> LevelUpdate<'a, R> {
         todo!()
     }
 
-    fn add_stop_order(order_book: C, order: &Order) {
+    fn add_stop_order(order_book: B, order: &Order<R>) {
         todo!()
     }
 
-    fn add_trailing_stop_order(order_book: C, order: &Order) {
+    fn add_trailing_stop_order(order_book: B, order: &Order<R>) {
         todo!()
     }
 
-    fn reduce_order(order_book: C, order: &'a Order<'a>, quantity: u64, hidden: u64, visible: u64) -> LevelUpdate<'a> {
+    fn reduce_order(order_book: B, order: &'a Order<'a, R>, quantity: u64, hidden: u64, visible: u64) -> LevelUpdate<'a, R> {
         todo!()
     }
 
-    fn delete_order(order_book: C, order: &'a Order<'a>) -> LevelUpdate<'a> {
+    fn delete_order(order_book: B, order: &'a Order<'a, R>) -> LevelUpdate<'a, R> {
         todo!()
     }
 
-    fn reduce_trailing_stop_order(order_book: C, order: &Order, quantity: u64, hidden: u64, visible: u64) {
+    fn reduce_trailing_stop_order(order_book: B, order: &Order<R>, quantity: u64, hidden: u64, visible: u64) {
         todo!()
     }
 
-    fn delete_trailing_stop_order(order_book: C, order: &Order) -> Result<(), &'static str> {
+    fn delete_trailing_stop_order(order_book: B, order: &Order<R>) -> Result<(), &'static str> {
         todo!()
     }
 
-    fn reduce_stop_order(order_book: C, order: &Order<'a>, quantity: u64, hidden_delta: u64, visible_delta: u64) {
+    fn reduce_stop_order(order_book: B, order: &Order<'a, R>, quantity: u64, hidden_delta: u64, visible_delta: u64) {
         todo!(); // Replace with actual logic
     }
 
-    fn delete_trailing_stop_level(order_book: C, order: &Order<'a>) {
+    fn delete_trailing_stop_level(order_book: B, order: &Order<'a, R>) {
         todo!(); // Replace with actual logic
     }
 
-    fn get_next_level_node(order_book: C, level_node: RcNode) -> Option<RcNode<'a>> {
+    fn get_next_level_node(order_book: B, level_node: A) -> Option<R> {
         todo!()
     }
 
-    fn best_trailing_buy_stop(order_book: C) -> Option<RcNode<'a>> {
+    fn best_trailing_buy_stop(order_book: B) -> Option<R> {
         todo!()
     }
 
-    fn best_trailing_sell_stop(order_book: C) -> Option<RcNode<'a>> {
+    fn best_trailing_sell_stop(order_book: B) -> Option<R> {
         todo!()
     }
 
-    fn activate_individual_stop_orders(order_book: C, level_node: Option<RcNode<'a>>, market_price: u64, orders: Orders) -> bool {
+    fn activate_individual_stop_orders(order_book: B, level_node: Option<R>, market_price: u64, orders: Orders< B>) -> bool {
         todo!()
     }
-    fn create_and_insert_level(order_book: C, price: u64, level_type: LevelType, tree: T) -> RcNode<'a> {
+    fn create_and_insert_level(order_book: B, price: u64, level_type: LevelType, tree: T) -> T {
         // Placeholder: Implement the logic to create and insert a level
         todo!()
     }
 
-    fn best_ask(order_book: C) -> Option<RcNode<'a>> {
+    fn best_ask(order_book: B) -> Option<R> {
         // Placeholder: Return the best ask level
         todo!()
     }
 
-    fn best_bid(order_book: C) -> Option<RcNode<'a>> {
+    fn best_bid(order_book: B) -> Option<R> {
         // Placeholder: Return the best bid level
         todo!()
     }
 
-    fn delete_level(order_book: C, order: &Order) {
+    fn delete_level(order_book: B, order: &Order<R>) {
         // Placeholder: Delete a level based on the order node
         todo!()
     }
 
-    fn is_top_of_book(order_book: C, order: &Order) -> bool {
+    fn is_top_of_book(order_book: B, order: &Order<R>) -> bool {
         // Placeholder: Determine if an order node is at the top of the book
         todo!()
     }
 
-    fn subtract_level_volumes(order_book: C, level: RcNode<'a>, order: &Order) {
-        // Placeholder: Subtract volumes from a level
-        todo!()
-    }
-
-    fn unlink_order(order_book: C, level: RcNode<'a>, order: &Order) {
-        // Placeholder:
-        todo!()
-    }
-    fn add_level(order_book: C, order: &Order) -> Option<RcNode<'a>> {
+    fn add_level(order_book: B, order: &Order<R>) -> Option<R> {
         todo!()
     }
 }
 
 #[derive(Default)]
-pub struct OrderBook<'a> {
+pub struct OrderBook<'a, R> 
+where
+    R: Ref<'a>
+{
+    pub best_bid: Option<R>,
+    pub best_ask: Option<R>,
+    pub bids: Option<R>,
+    pub asks: Option<R>,
 
-    pub best_bid: Option<RcNode<'a>>,
-    pub best_ask: Option<RcNode<'a>>,
-    pub bids: Option<RcNode<'a>>,
-    pub asks: Option<RcNode<'a>>,
-
-    pub best_buy_stop: Option<RcNode<'a>>,
-    pub best_sell_stop: Option<RcNode<'a>>,
-    pub buy_stop: Option<RcNode<'a>>,
-    pub sell_stop: Option<RcNode<'a>>,
+    pub best_buy_stop: Option<R>,
+    pub best_sell_stop: Option<R>,
+    pub buy_stop: Option<R>,
+    pub sell_stop: Option<R>,
 
     pub(crate) last_bid_price: u64,
     pub(crate) last_ask_price: u64,
     pub(crate) matching_bid_price: u64,
     pub(crate) matching_ask_price: u64,
 
-    pub best_trailing_buy_stop: Option<RcNode<'a>>,
-    pub best_trailing_sell_stop: Option<RcNode<'a>>,
-    pub trailing_buy_stop: Option<RcNode<'a>>,
-    pub trailing_sell_stop: Option<RcNode<'a>>,
+    pub best_trailing_buy_stop: Option<R>,
+    pub best_trailing_sell_stop: Option<R>,
+    pub trailing_buy_stop: Option<R>,
+    pub trailing_sell_stop: Option<R>,
     pub trailing_bid_price: u64,
     pub trailing_ask_price: u64,
+    pub(crate) _marker: PhantomData<&'a M>
 }
 
-impl<'a> OrderBook<'_> {
+impl<'a, R: Ref<'a> + 'a> OrderBook<'_, R> {
 
-    pub fn new() -> OrderBook<'a> {
+    pub fn new() -> OrderBook<'a, R> {
         OrderBook {
             best_bid: todo!(),
             best_ask: todo!(),
@@ -268,66 +282,78 @@ impl<'a> OrderBook<'_> {
             trailing_sell_stop: todo!(),
             trailing_bid_price: todo!(),
             trailing_ask_price: todo!(),
+            _marker: PhantomData
         }
     }
 }
 
-pub fn reduce_trailing_stop_order<'a, C: DerefMut<Target = OrderBook<'a>>, E: Execution<'a, C>>(order: &Order, quantity: u64, hidden: u64, visible: u64) {
+//#[cfg(feature = "experimental_level_changes")]
+pub fn reduce_trailing_stop_order<'a, L, R>(order: &Order<R>, quantity: u64, hidden: u64, visible: u64) 
+where
+    L: LevelOps<'a, R>,
+    R: Ref<'a>,
+{
     // Assuming we have a way to get a mutable reference to an order and its level.
     // Update the price level volume
     // remove panicking behavior from code
-    let mut level_node = order.level_node.expect("level node not retrieved from order node");
-    let level = (*level_node).borrow().level;
-    // Update the price level volume
-    let level_node = Some(level_node);
-    E::subtract_level_volumes(level_node, order);
-    // Unlink the empty order from the orders list of the price level
-    if order.leaves_quantity == 0 {
-        E::unlink_order(level_node, *order);
-    }
-    // Delete the empty price level
-    if level.total_volume == 0 {
-        order.level_node = None
+    match order.level_node {
+        Some(node) => {
+            let mut borrowed_level = node.borrow_mut().level;
+            // looking to get &mut level isolation here
+            L::subtract_volumes(&mut borrowed_level, order);
+            if order.leaves_quantity == 0 {
+                L::unlink_order(&mut borrowed_level, order)
+            }
+            if borrowed_level.total_volume == 0 {
+                order.level_node = None
+            }
+        },
+        None => {
+            eprintln!("order level node not obtained")
+        }
     }
 }
 
 // Method to get the best trailing buy stop level
-pub fn best_trailing_buy_stop<'a, C>(order_book: C) -> Option<RcNode<'a>> 
+pub fn best_trailing_buy_stop<'a, B>(order_book: B) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    B: MutableBook<'a>,
 {
     (*order_book).best_trailing_buy_stop
 }
 
 // Method to get the best trailing sell stop level
-pub fn best_trailing_sell_stop<'a, C>(order_book: C) -> Option<RcNode<'a>> 
+pub fn best_trailing_sell_stop<'a, B>(order_book: B) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    B: MutableBook<'a>,
 {
     (*order_book).best_trailing_sell_stop
 }
 
-pub fn get_trailing_buy_stop_level<'a, C, T>(order_book: C, price: u64) -> Option<RcNode<'a>> 
+pub fn get_trailing_buy_stop_level<'a, B, R>(order_book: B, price: u64) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     //((*order_book).trailing_buy_stop.expect("best trailing buy stop failed").borrow_mut()).get(price)
     T::get((*order_book).trailing_buy_stop, price)
 }
 
 // Method to get the trailing sell stop level
-pub fn get_trailing_sell_stop_level<'a, C, T>(order_book: C, price: u64) -> Option<RcNode<'a>> 
+pub fn get_trailing_sell_stop_level<'a, B, R>(order_book: B, price: u64) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     T::get((*order_book).trailing_sell_stop, price)
 }
 
-pub fn get_next_trailing_stop_level<'a, C, T: Tree<'a>>(order_book: C, level_node: RcNode) -> Option<RcNode> 
+pub fn get_next_trailing_stop_level<'a, B, R>(order_book: B, level_node: A) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {  
     if (*level_node.borrow_mut()).is_bid() {
         // Find the next level in reverse order in _trailing_sell_stop
@@ -338,10 +364,11 @@ where
     }
 }
 
-pub fn delete_trailing_stop_level<'a, C, T>(mut order_book: C, order: &Order) 
+pub fn delete_trailing_stop_level<'a, B, R>(mut order_book: B, order: &Order<R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     // remove panicking behavior from code
     let level_node = order.level_node.expect("level node not retrieved");
@@ -383,9 +410,10 @@ where
     // (*order_book).level_pool.release(level_node.price)
 }
 
-pub fn add_trailing_stop_level<'a, C>(mut order_book: C, order: &Order) -> Option<RcNode<'a>> 
+pub fn add_trailing_stop_level<'a, B>(mut order_book: B, order: &Order<R>) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     let (price, level_node) = if order.is_buy() {
         let level_node = Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order.stop_price))));
@@ -411,24 +439,27 @@ where
     Some(level_node)
 }
 
-pub fn best_buy_stop<'a, C>(order_book: C) -> Option<RcNode<'a>> 
+pub fn best_buy_stop<'a, B>(order_book: B) -> Option<R> 
 where 
-    C: DerefMut<Target = OrderBook<'a>>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     (*order_book).best_buy_stop
 }
 
 // Method to get the best sell stop level
-pub fn best_sell_stop<'a, C>(order_book: C) -> Option<RcNode<'a>> 
+pub fn best_sell_stop<'a, B>(order_book: B) -> Option<R> 
 where 
-    C: DerefMut<Target = OrderBook<'a>>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     (*order_book).best_sell_stop
 }
 
-pub fn add_stop_level<'a, C>(mut order_book: C, order: &Order) -> Option<RcNode<'a>> 
+pub fn add_stop_level<'a, B>(mut order_book: B, order: &Order<R>) -> Option<R> 
 where 
-    C: DerefMut<Target = OrderBook<'a>>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     // Determine the level type and price based on the order node
     // Determine the price and create a level node
@@ -458,14 +489,15 @@ where
     Some(level_option)
 }
 
-pub fn create_and_insert_level<'a, T, C, B, E, O, H>(mut order_book: C, price: u64, level_type: LevelType) -> Option<RcNode<'a>> 
+pub fn create_and_insert_level<'a, T, B, E, O, H, R>(mut order_book: B, price: u64, level_type: LevelType) -> Option<R> 
 where
-    T: Tree<'a>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    T: Tree<'a, R>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     // Create a new price level based on the provided level type
     // Insert the price level into the appropriate collection based on level type
@@ -492,10 +524,11 @@ where
 }
 
 
-pub fn delete_level<'a, C, B, T>(mut order_book: C, order: &Order) 
+pub fn delete_level<'a, B, T, R>(mut order_book: B, order: &Order<R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     // remove panicking behavior from code
     let level_node = order.level_node.expect("order node level not retrieved");
@@ -536,14 +569,15 @@ where
     }
 }
 
-pub fn add_level<'a, T, C, B, E, O, H>(mut order_book: C, order: &Order, tree: T) -> Option<RcNode<'a>> 
+pub fn add_level<'a, T, B, E, O, H, R>(mut order_book: B, order: &Order<R>, tree: T) -> Option<R> 
 where
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    T: Tree<'a>,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    O: OrderOps<'a, B>,
+    T: Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    B: MutableBook<'a>,
 {
     let level_node = B::create_and_insert_level(order_book, order.price, if order.is_buy() { LevelType::Bid } else { LevelType::Ask }, tree);
     // remove panicking behavior from code
@@ -563,57 +597,64 @@ where
     Some(level_node)
 }
 
-pub fn get_next_level_node<'a, C, B>(order_book: C, level_node: RcNode) -> Option<RcNode<'a>> 
+pub fn get_next_level_node<'a, B, R>(order_book: B, level_node: A) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     todo!()
 }
 
-pub fn best_ask<'a, C, B>(order_book: C) -> Option<RcNode<'a>> 
+pub fn best_ask<'a, B, R>(order_book: B) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     (*order_book).best_ask
 }
 
-pub fn best_bid<'a, C, B>(order_book: C) -> Option<RcNode<'a>> 
+pub fn best_bid<'a, B, R>(order_book: B) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     (*order_book).best_bid
 } 
 
-pub fn get_bid<'a, C, B, T>(order_book: C, price: u64) -> Option<RcNode<'a>> 
+pub fn get_bid<'a, B, T, R>(order_book: B, price: u64) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     let price: u64 = (*(*order_book).bids.expect("asks not retrieved").borrow_mut()).price;
     T::remove((*order_book).bids, price)
 }
 
-pub fn get_ask<'a, C, B, T>(order_book: C, price: u64) -> Option<RcNode<'a>> 
+pub fn get_ask<'a, B, T, R>(order_book: B, price: u64) -> Option<R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     let price: u64 = (*(*order_book).asks.expect("asks not retrieved").borrow_mut()).price;
     T::remove((*order_book).asks, price)
 }
 
-pub fn get_market_trailing_stop_price_ask<'a, C>(order_book: C) -> u64
+pub fn get_market_trailing_stop_price_ask<'a, B>(order_book: B) -> u64
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 { 
     let last_price = (*order_book).last_ask_price;
     let best_price = (*order_book).best_ask.map_or(u64::MAX, |ask_node| (*ask_node).borrow().level.price);
     std::cmp::max(last_price, best_price)
 }
 
-pub fn get_market_trailing_stop_price_bid<'a, C>(order_book: C) -> u64 
+pub fn get_market_trailing_stop_price_bid<'a, B>(order_book: B) -> u64 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     let last_price = (*order_book).last_bid_price;
     let best_price = if (*order_book).best_bid.is_some() {
@@ -625,9 +666,10 @@ where
     std::cmp::min(last_price, best_price)
 }
 
-pub fn is_top_of_book<'a, C>(order_book: C, order: &Order) -> bool 
+pub fn is_top_of_book<'a, B>(order_book: B, order: &Order<R>) -> bool 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     if let Some(level_node) = order.level_node {
         return match order.is_buy() {
@@ -644,9 +686,11 @@ where
     false
 }
 
-pub fn update_level<'a, H: Handler, C: DerefMut<Target = OrderBook<'a>>>(order_book: C, update: LevelUpdate) 
+pub fn update_level<'a, B, H>(order_book: B, update: LevelUpdate<'a, R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    H: Handler<'a, B>
 {
     match update.update_type {
         UpdateType::Add => H::on_add_level(order_book, update.update_type, update.top),
@@ -657,9 +701,10 @@ where
     H::on_update_order_book(order_book, update.top)
 }
 
-pub fn on_trailing_stop<'a, C>(order_book: C, order: Order) 
+pub fn on_trailing_stop<'a, B>(order_book: B, order: Order<'a, R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     // Here you would implement the specific logic for handling a trailing stop order
     // For example:
@@ -673,17 +718,19 @@ where
     // Other logic as needed for trailing stops...
 }
 
-pub fn reset_matching_price<'a, C, B>(mut order_book: C) 
+pub fn reset_matching_price<'a, B, R>(mut order_book: B) 
 where
-    C: DerefMut<Target = OrderBook<'a>>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     (*order_book).matching_bid_price = 0;
     (*order_book).matching_ask_price = u64::MAX;
 }
 
-pub fn get_market_ask_price<'a, C, B>(order_book: C) -> u64 
+pub fn get_market_ask_price<'a, B, R>(order_book: B) -> u64 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     let best_price = if (*order_book).best_ask.is_some() {
         // remove panicking behavior from code
@@ -694,9 +741,10 @@ where
     min(best_price, (*order_book).matching_ask_price)
 }
 
-pub fn get_market_bid_price<'a, C, B>(order_book: C) -> u64 
+pub fn get_market_bid_price<'a, B, R>(order_book: B) -> u64 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     let best_price = if (*order_book).best_bid.is_some() {
         // remove panicking behavior from code
@@ -707,9 +755,10 @@ where
     max(best_price, (*order_book).matching_bid_price)
 }
 
-pub fn update_last_price<'a, C, B>(mut order_book: C, order: Order, price: u64) 
+pub fn update_last_price<'a, B, R>(mut order_book: B, order: Order<R>, price: u64) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     if order.is_buy() {
         (*order_book).last_bid_price = price;
@@ -718,9 +767,10 @@ where
     }
 }
 
-pub fn update_matching_price<'a, C, B>(mut order_book: C, order: Order, price: u64) 
+pub fn update_matching_price<'a, B, R>(mut order_book: B, order: Order<R>, price: u64) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
 {
     if order.is_buy() {
         (*order_book).matching_bid_price = price;
@@ -729,14 +779,15 @@ where
     }
 }
 
-pub fn calculate_trailing_stop_price<'a, C, B, E, H, T, O>(order_book: C, order: Order) -> u64 
+pub fn calculate_trailing_stop_price<'a, B, E, H, T, O, R>(order_book: B, order: Order<'a, R>) -> u64 
 where
-    E: Execution<'a, C>,
-    H: Handler,
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>,
+    O: OrderOps<'a, B>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     // Get the current market price
     let market_price = if order.is_buy() {
@@ -775,14 +826,13 @@ where
     old_price
 }
 
-pub fn recalculate_trailing_stop_price<'a, C, H, T, O, B, E>(mut order_book: C, level: Level) 
+pub fn recalculate_trailing_stop_price<'a, H, T, O, B, E, R>(mut order_book: B, level: Level<R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    E: Execution<'a, C>,
-    H: Handler,
-    T: Tree<'a>,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     let mut new_trailing_price;
 
@@ -816,7 +866,7 @@ where
         }
     };
 
-    let mut previous: Option<RcNode> = None;
+    let mut previous: Option<R> = None;
 
     while let Some(current_level) = current {
         let mut recalculated = false;
@@ -840,7 +890,7 @@ where
                     _ => panic!("Unsupported order type!"),
                 }
                 H::on_update_order(&order);
-                B::add_trailing_stop_order(order_book, order);
+                B::add_trailing_stop_order(order_book, &order);
                 recalculated = true;
             }
             let next_order = order.next_mut();
@@ -863,15 +913,14 @@ where
 }
 
 
-pub fn activate_stop_orders<'a, E, O, C, T, H, B>(mut order_book: C, mut orders: Orders) -> bool 
+pub fn activate_stop_orders<'a, E, H, B, R>(mut order_book: B, mut orders: Orders< B>) -> bool 
 where
-    O: OrderOps,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    T: Tree<'a>,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    O: OrderOps<'a, B>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, H, M, A>,
+    B: MutableBook<'a>,
 {
     let mut result = false;
     let mut stop = false;
@@ -905,12 +954,12 @@ where
     result
 }
 
-pub fn activate_individual_stop_orders<'a, E, O, A, C>(order_book: C, level_node: Option<RcNode>, stop_price: u64, orders: Orders) -> bool 
+pub fn activate_individual_stop_orders<'a, E, C, R, H>(order_book: B, level_node: Option<R>, stop_price: u64, orders: Orders< B>) -> bool 
 where
-    E: Execution<'a, C>,
-    O: OrderOps,
-    A: AsMut<RcNode<'a>>,
-    C: DerefMut<Target = OrderBook<'a>>
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: MutableBook<'a>,
 {
 
     let mut result = false;
@@ -945,15 +994,14 @@ where
     result
 }
 
-pub fn activate_stop_order<'a, E, O, A, C, H, T, B>(mut orders: Orders, mut order_book: C, mut order: &Order) -> bool 
+pub fn activate_stop_order<'a, E, O, A, H, T, B, M>(mut orders: Orders< B>, mut order_book: B, mut order: &Order<R>) -> bool 
 where
-    O: OrderOps,
-    E: Execution<'a, C>,
-    H: Handler,
-    T: Tree<'a>,
-    A: AsMut<RcNode<'a>>,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    C: DerefMut<Target = OrderBook<'a>>,
+    R: Ref<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    A: AsMut<T>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    B: MutableBook<'a>,
 {
     // Delete the stop order from the order book
     if order.is_trailing_stop() || order.is_trailing_stop_limit() {
@@ -985,14 +1033,13 @@ where
     true
 }
 
-pub fn activate_stop_limit_order<'a, E, O, A, C, H, B, T>(mut order_book: C, mut order: &Order, mut orders: Orders) -> bool 
+pub fn activate_stop_limit_order<'a, E, A, H, B, M>(mut order_book: B, mut order: &Order<R>, mut orders: Orders< B>) -> bool 
 where
-    T: Tree<'a>,
-    C: DerefMut<Target = OrderBook<'a>>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, H, M, A>,
 {
     // Delete the stop order from the order book
     if order.is_trailing_stop() || order.is_trailing_stop_limit() {
@@ -1021,14 +1068,13 @@ where
 }
 
 
-pub fn add_order<'a, T, C, E, H, O, B>(order_book: C, order: &Order) -> LevelUpdate<'a> 
+pub fn add_order<'a, E, H,B, R>(order_book: B, order: &Order<R>) -> LevelUpdate<'a, R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     let mut update_type = UpdateType::Update;
     // Find the price level for the order
@@ -1040,7 +1086,7 @@ where
       //  (*order_book.asks.expect("order book asks")).borrow_mut().get(&order.price)
     };
 
-    let binding: Option<RcNode>;
+    let binding: Option<R>;
     if let None = existing_level {
         binding = B::add_level(order_book, order);
         existing_level = binding;
@@ -1048,11 +1094,11 @@ where
     }
 
     let level_node: Rc<RefCell<LevelNode<'_>>>;
-    let mut level: Level;
+    let mut level: Level<R>;
 
     if let Some(level_node) = existing_level {
         level = (*level_node).borrow().level;
-        B::add_level_volumes(order_book, level, order);
+        B::add_volumes(order_book, level, order);
         level.orders.push_back(*order);
         (*order.level_node.expect("order node level not obtained")).borrow().level = level;
     }
@@ -1066,21 +1112,20 @@ where
             hidden_volume: level.hidden_volume,
             visible_volume: level.visible_volume,
             orders: todo!(),
-            tree_node: todo!(),
+            _marker: std::marker::PhantomData,
         },
         top: B::is_top_of_book(order_book, order),
     }
 }
 
-pub fn add_limit_order<'a, E, H, O, C, T, B, OB, OC>(orders: Orders, order: Order, matching: bool, order_books: OBMap<'a, C>, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_limit_order<'a, E, H, B, OB, OC, R>(orders: Orders< B>, order: Order<R>, matching: bool, order_books: OBMap<'a, R, T>, recursive: bool) -> Result<(), ErrorCode> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
-    OC: OrderBookContainer<'a, C>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
+    OC: OrderBookContainer<'a, B, H, T>
 {     
     let mut order_book = OC::get_order_book(order_books, &order.symbol_id).expect("order book not found");
     let order = E::get_order(orders, order.symbol_id).expect("order node not found");
@@ -1115,14 +1160,13 @@ where
     Ok(())
 }
 
-pub fn add_stop_order<'a, C, T, E, H, O, B>(order_book: C, order: &Order) 
+pub fn add_stop_order<'a, T, E, H, O, B, R>(order_book: B, order: &Order<R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     // Find the price level for the order
     let level_node = if order.is_buy() {
@@ -1142,7 +1186,7 @@ where
 
     if let Some(level_node) = binding {
         let mut level = (*level_node).borrow().level;
-        B::add_level_volumes(order_book, level, order);
+        B::add_volumes(order_book, level, order);
         // Link the new order to the orders list of the price level
         level.orders.push_back(*order); 
         (*order).level_node = Some(level_node)
@@ -1152,14 +1196,14 @@ where
     }
 }
 
-pub fn add_trailing_stop_order<'a, C, T, E, H, O, B>(order_book: C, order: &Order) 
+pub fn add_trailing_stop_order<'a, T, E, H, O, B, L, A, J, M>(order_book: B, order: &Order<R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    L: LevelOps<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     let level_node = if order.is_buy() {
         T::get((*order_book).trailing_buy_stop, order.stop_price)
@@ -1175,11 +1219,11 @@ where
 
     let mut level = level_node.expect("tree operation failed").borrow_mut().level;
     // Update the price level volume
-    B::add_level_volumes(order_book, level, order);
+    L::add_volumes(&mut level, order);
 
     // Link the new order to the orders list of the price level
     // check for correctness
-    B::link_order(level, order);
+    L::link_order(&mut level, order);
 
     // Unlink the empty order from the orders list of the price level
     level.orders.push_back(*order);
@@ -1188,14 +1232,13 @@ where
 }
 
 
-pub fn reduce_order<'a, C, T, E, H, O, B>(order_book: C, mut order: &'a Order<'a>, quantity: u64, hidden: u64, visible: u64) -> LevelUpdate<'a> 
+pub fn reduce_order<'a, T, E, H, O, B, R>(order_book: B, mut order: &'a Order<'a, R>, quantity: u64, hidden: u64, visible: u64) -> LevelUpdate<'a, R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     let mut update_type = UpdateType::Update;
     let mut level_update: LevelUpdate;
@@ -1227,30 +1270,31 @@ where
             hidden_volume: level.hidden_volume,
             visible_volume: level.visible_volume,
             orders: todo!(),
-            tree_node: todo!(),
+            _marker: std::marker::PhantomData,
         },
         top: B::is_top_of_book(order_book, order),
     }
 }
 
-pub fn delete_order<'a, C, T, E, H, O, B>(order_book: C, order: &'a Order<'a>) -> LevelUpdate<'a> 
+pub fn delete_order<'a, T, E, H, O, B, L, G, R>(order_book: B, order: &'a Order<'a, R>) -> LevelUpdate<'a, R> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    E: Execution<'a, B, H>,
+    A: Deref<Target = Order<'a, R>>,
+    L: LevelOps<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     // remove panicking behavior from code
     let mut level_node = order.level_node.expect("level node not retrieved from order node");
-    let level = (*level_node).borrow().level;
+    let mut level = (*level_node).borrow().level;
     
     // Update the price level volume
-    B::subtract_level_volumes(order_book, level_node, order);
+    L::subtract_volumes(&mut level, order);
 
     // Unlink the empty order from the orders list of the price level
-    B::unlink_order(order_book, level_node, order);
+    L::unlink_order(&mut level, order);
 
     let mut update_type = UpdateType::Update;
     if level.total_volume == 0 {
@@ -1267,7 +1311,8 @@ where
             hidden_volume: level.hidden_volume,
             visible_volume: level.visible_volume,
             orders: todo!(),
-            tree_node: todo!(),
+            _marker: std::marker::PhantomData,
+            
         },
         top: B::is_top_of_book(order_book, order),
     }
@@ -1275,14 +1320,13 @@ where
     
 }
 
-pub fn reduce_stop_order<'a, C, T, E, H, O, B>(order_book: C, order: &Order, quantity: u64, hidden: u64, visible: u64) 
+pub fn reduce_stop_order<'a, T, E, H, O, B, R>(order_book: B, order: &Order<R>, quantity: u64, hidden: u64, visible: u64) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     // Find the price level for the order
     // remove panicking behavior from code
@@ -1304,14 +1348,13 @@ where
     };
 }
 
-pub fn delete_stop_order<'a, C, T, E, H, O, B>(order_book: C, order: &Order) 
+pub fn delete_stop_order<'a, T, E, H, O, B, R>(order_book: B, order: &Order<R>) 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {    
     // Update the price level volume
     // Find the price level for the order
@@ -1332,24 +1375,24 @@ where
 }
 
 
-pub fn delete_trailing_stop_order<'a, E, C, T, H, O, B>(order_book: C, order: &Order) -> Result<(), &'static str> 
+pub fn delete_trailing_stop_order<'a, E, T, H, O, B, G, L, R>(order_book: B, order: &Order<R>) -> Result<(), &'static str> 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    E: Execution<'a, B, H>,
+    L: LevelOps<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     // remove panicking behavior from code
-    let mut level_node = order.level_node;
+    let mut level = (*order.level_node.expect("level node not retrieved from order node")).borrow().level;
     
     // Update the price level volume
     // check for correctness with doubling up
-    E::subtract_level_volumes(level_node, order);
+    L::subtract_volumes(&mut level, order);
 
     // Unlink the empty order from the orders list of the price level
-    let mut level = (*level_node.expect("order node level node not found")).borrow().level;
+    // let mut level = (*level.expect("order node level node not found")).borrow().level;
     level.orders.pop_current(&order); // Assuming each order has a unique identifier
 
     // Delete the empty price level
@@ -1360,10 +1403,11 @@ where
     Ok(())
 }
 
-pub fn delete_stop_level<'a, C, T>(mut order_book: C, order: &Order) 
+pub fn delete_stop_level<'a, B, R>(mut order_book: B, order: &Order<R>) 
 where 
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    T: Tree<'a, R>
 {
     // remove panicking behavior from code
     let level_node = order.level_node.expect("order node level node not retrieved");
@@ -1402,14 +1446,13 @@ where
 }
 
 
-pub fn activate_stop_orders_level<'a, E, C, T, H, O, B>(order_book: C, mut level: Level, stop_price: u64) -> bool 
+pub fn activate_stop_orders_level<'a, E, T, H, O, B, R>(order_book: B, mut level: Level<'a, R>, stop_price: u64) -> bool 
 where
-    C: DerefMut<Target = OrderBook<'a>>,
-    T: Tree<'a>,
-    E: Execution<'a, C>,
-    H: Handler,
-    O: OrderOps,
-    B: OrderBookOperations<'a, C, E, O, H, T>,
+    R: Ref<'a>,
+    B: MutableBook<'a>,
+    E: Execution<'a, B, H>,
+    H: Handler<'a, B> + OrderOps<'a, B> + Tree<'a, R>,
+    B: OrderBookOperations<'a, E, O, H, T, M, A>,
 {
     let mut result = false;
     
