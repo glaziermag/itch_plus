@@ -1,43 +1,47 @@
-use std::{collections::HashMap, ops::DerefMut};
+use std::{collections::HashMap, ops::{Deref, DerefMut}};
 
+use super::order::{ErrorCode, Order};
 
-use crate::levels::indexing::{MutableBook};
-
-use super::order::Order;
-
-pub trait OrderOps<'a, B, R> 
-where 
-    B: MutableBook<'a>,
-    R: Ref<'a>,
+pub trait OrderOps
 {
-    fn insert_order(orders: Orders<'a, B>, id: &'a u64, order: Order<'a, R>) -> Option<Order<'a, R>>;
-    fn remove_order(orders: Orders<'a, B>, id: &'a u64) -> Option<Order<'a, R>> ;
+    fn insert_order(&mut self, id: &u64, order: Order) -> Option<Order>;
+    fn remove_order(&mut self, id: &u64) -> Option<Order>;
+    fn get_order(&self, id: u64) -> Result<&Order, ErrorCode>;
 }
 
-impl<'a, B> OrderOps<'a, B> for Orders<'_,  B> {
-    fn insert_order(mut orders: Orders<'a, B>, id: &'a u64, order: Order<'a, R>) -> Option<Order<'a, R>> {
-        orders.insert(*id, order)
+impl OrderOps for Orders 
+{
+    fn insert_order(&mut self, id: &u64, order: Order) -> Option<Order> {
+        self.insert(*id, order)
     }
 
-    fn remove_order(mut orders: Orders<'a, B>, id: &'a u64) -> Option<Order<'a, R>> {
-        orders.remove(&id)
+    fn remove_order(&mut self, id: &u64) -> Option<Order> {
+        self.remove(&id)
+    }
+
+    fn get_order(&self, id: u64) -> Result<&Order, ErrorCode> {
+        self.orders.get(&id).ok_or(ErrorCode::OrderNotFound)
     }
 }
 
-pub struct Orders<'a, B> {
-    orders: HashMap<u64, Order<'a, R>>
+#[derive(Default)]
+pub struct Orders
+{
+    orders: HashMap<u64, Order>
 }
 
 
-impl<'a, B> Deref for Orders<'a, B> {
-    type Target = HashMap<u64, Order<'a, R>>;
+impl Deref for Orders 
+{
+    type Target = HashMap<u64, Order>;
 
     fn deref(&self) -> &Self::Target {
         &self.orders
     }
 }
 
-impl<'a, B> DerefMut for Orders<'a, B> {
+impl DerefMut for Orders 
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.orders
     }

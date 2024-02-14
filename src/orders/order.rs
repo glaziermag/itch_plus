@@ -1,8 +1,8 @@
 use core::fmt;
 
-use crate::levels::indexing::Ref;
+use crate::levels::indexing::{LevelNode, NodeHolder};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrderSide {
     Buy,
     Sell,
@@ -14,7 +14,7 @@ impl Default for OrderSide {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OrderType {
     Buy,
     Market,
@@ -31,7 +31,7 @@ impl Default for OrderType {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TimeInForce {
     IOD,
     FOK,
@@ -40,7 +40,7 @@ pub enum TimeInForce {
 
 impl Default for TimeInForce {
     fn default() -> Self {
-        TimeInForce::IOC // Assuming 'IOC' as a sensible default
+     TimeInForce::IOD // Assuming 'IO' as a sensible default
     }
 }
 
@@ -74,8 +74,8 @@ impl From<&'static str> for ErrorCode {
     }
 }
 
-#[derive()]
-pub struct Order<'a, R: Ref<'a>> {
+#[derive(Debug, PartialEq, Clone)]
+pub struct Order {
     pub id: u64,
     pub symbol_id: u64,
     pub order_type: OrderType,
@@ -92,10 +92,10 @@ pub struct Order<'a, R: Ref<'a>> {
     pub slippage: u64,
     pub trailing_distance: u64,
     pub trailing_step: u64,
-    pub level_node: Option<R>,
+    pub level_node: Option<NodeHolder<LevelNode>>,
 }
 
-impl<'a, R: Ref<'a>> Default for Order<'_, R> {
+impl Default for Order {
     fn default() -> Self {
         Order {
             id: 0,
@@ -119,8 +119,7 @@ impl<'a, R: Ref<'a>> Default for Order<'_, R> {
     }
 }
 
-impl<'a, R> Order<'a, R> {
-
+impl Order {
     pub fn validate(&self) -> Result<(), ErrorCode> {
         // Validate order Id
         if self.id == 0 {
@@ -175,9 +174,9 @@ impl<'a, R> Order<'a, R> {
     }
 }
 
-impl<'a, R> Order<'_, R> {
+impl Order {
     // Corresponds to the C++ constructor that accepts an Order
-    pub fn new(order: Order<R>) -> Self {
+    pub fn new(order: &Order) -> Self {
         Self {
             id: todo!(),
             level_node: todo!(),
@@ -244,7 +243,12 @@ impl<'a, R> Order<'_, R> {
     }
 
     // Returns a mutable reference to the next Order
-    pub fn next_mut(&self) -> Option<&mut Order<R>> {
+    pub fn next(&self) -> Option<&Order> {
+        self.next()
+    }
+
+    // Returns a mutable reference to the next Order
+    pub fn next_mut(&self) -> Option<&mut Order> {
         self.next_mut()
     }
 

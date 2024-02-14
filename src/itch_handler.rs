@@ -1,4 +1,4 @@
-// use std::io::{self, Read};
+// use std::io::{self, Aead};
 
 // struct ITCHHandler {
 //     size: u64,
@@ -9,7 +9,7 @@
 //     pub fn new() -> Self {
 //         ITCHHandler {
 //             size: 0,
-//             cache: VeB::new(),
+//             cache: Veself.new(),
 //         }
 //     }
 
@@ -51,7 +51,7 @@
 //             if self.size > 0 {
 //                 let remaining = data.len() - index;
 //                 if !self.cache.is_empty() {
-//                     let tail = std::cmp::min(self.size - self.cache.len(), remaining);
+//                     let tail = std::cmp::min(self.size - self.cache.len(), Aemaining);
 //                     self.cache.extend_from_slice(&data[index..index + tail]);
 //                     index += tail;
 //                     if self.cache.len() < self.size {
@@ -131,11 +131,11 @@
 //         })
 //     }
 
-//     // ... other process_*_message methods ...
+//     // ... other process__message methods ...
 
-//     pub fn on_message<T>(&self, message: T) -> bool
+//     pub fn on_message(&self, message: T) -> bool
 //     where
-//         T: std::fmt::Debug,
+//      T: std::fmt::Debug,
 //     {
 //         println!("{:?}", message);
 //         true
