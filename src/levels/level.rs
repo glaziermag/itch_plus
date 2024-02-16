@@ -2,35 +2,60 @@
 use std::{collections::LinkedList, cmp::Ordering};
 
 use orders::order::Order;
-use crate::orders;
+use crate::{order_book::order_book::OrderBook, orders::{self, order::ErrorCode}};
 
-use super::indexing::{LevelNode};
+use super::indexing::LevelNode;
 
 
 pub trait LevelOps 
 {
-    fn subtract_volumes(&mut self, order: &Order);
-    fn unlink_order(&mut self, order: &Order);
-    fn link_order(&mut self, order: &Order);
-    fn add_volumes(&mut self, order: &Order);
+    fn subtract_volumes(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>;
+    fn unlink_order(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>;
+    fn link_order(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>;
+    fn add_volumes(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>;
+    fn conditional_unlink_order(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>;
+    fn process_level(&mut self, order_book: &mut OrderBook, order: &mut Order) -> Result<&mut Level, ErrorCode> ;
 }
 
 impl LevelOps for Level  
 {
-    fn subtract_volumes(&mut self, order: &Order) {
-        self.total_volume -= order.leaves_quantity();
+    fn subtract_volumes(&mut self, order: &Order) -> Result<&mut Level, ErrorCode> {
+        self.total_volume -= order.leaves_quantity;
         self.hidden_volume -= order.hidden_quantity();
-        self.visible_volume -= order.visible_quantity();
+        self.visible_volume -= order.visible_quantity;
+        Ok(self)
     }
-    fn add_volumes(&mut self, order: &Order) {
-        self.total_volume += order.leaves_quantity();
+    fn add_volumes(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>{
+        self.total_volume += order.leaves_quantity;
         self.hidden_volume += order.hidden_quantity();
-        self.visible_volume += order.visible_quantity();
+        self.visible_volume += order.visible_quantity;
+        Ok(self)
     }
-    fn unlink_order(&mut self, order: &Order) {
+    fn unlink_order(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>{
         self.orders.pop_current(order); 
+        Ok(self)
     }
-    fn link_order(&mut self, order: &Order) {
+    // Function to conditionally unlink an order from a level
+    fn conditional_unlink_order(&mut self, order: &Order) -> Result<&mut Level, ErrorCode> {
+        if order.leaves_quantity == 0 {
+            self.unlink_order(order)
+        } else {
+            Ok(self)
+        }
+    }
+    fn process_level(&mut self, order_book: &mut OrderBook, order: &mut Order) -> Result<&mut Level, ErrorCode>  {
+        if self.total_volume == 0 {
+            // Assuming `delete_trailing_stop_level` is a method of OrderBook that requires a reference to Order
+            order_book.delete_trailing_stop_level(order);
+
+            // Assuming `level_node` is an Option for a linkage structure (like a node in a linked list or tree)
+            // and you want to remove it if certain conditions are met
+            // Here, we simply take() the Option, effectively removing it
+            order.level_node.take();
+        }
+        Ok(self)
+    }
+    fn link_order(&mut self, order: &Order) -> Result<&mut Level, ErrorCode>{
         todo!()
     }
 }
@@ -48,10 +73,10 @@ pub struct Level {
 impl From<Level> for LevelNode {
     fn from(level: Level) -> Self {
         LevelNode {
-            level,
             parent: None,
             left: None,
             right: None,
+            level:  level,
         }
     }
 }
@@ -89,9 +114,9 @@ impl Level {
     
 
     pub fn add_volumes(&mut self, order: &Order) {
-        self.total_volume += order.leaves_quantity();
+        self.total_volume += order.leaves_quantity;
         self.hidden_volume += order.hidden_quantity();
-        self.visible_volume += order.visible_quantity();
+        self.visible_volume += order.visible_quantity;
     }
 
     // pub fn link_order(&self, mut level: Level, order: &Order) {

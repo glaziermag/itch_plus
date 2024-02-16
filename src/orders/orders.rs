@@ -4,15 +4,16 @@ use super::order::{ErrorCode, Order};
 
 pub trait OrderOps
 {
-    fn insert_order(&mut self, id: &u64, order: Order) -> Option<Order>;
+    fn insert_order(&mut self, id: &u64, order: &Order) -> Option<Order>;
     fn remove_order(&mut self, id: &u64) -> Option<Order>;
     fn get_order(&self, id: u64) -> Result<&Order, ErrorCode>;
+    fn get_mut_order(&mut self, id: u64) -> Result<&mut Order, ErrorCode>;
 }
 
 impl OrderOps for Orders 
 {
-    fn insert_order(&mut self, id: &u64, order: Order) -> Option<Order> {
-        self.insert(*id, order)
+    fn insert_order(&mut self, id: &u64, order: &Order) -> Option<Order> {
+        self.insert(*id, *order)
     }
 
     fn remove_order(&mut self, id: &u64) -> Option<Order> {
@@ -21,6 +22,10 @@ impl OrderOps for Orders
 
     fn get_order(&self, id: u64) -> Result<&Order, ErrorCode> {
         self.orders.get(&id).ok_or(ErrorCode::OrderNotFound)
+    }
+
+    fn get_mut_order(&mut self, id: u64) -> Result<&mut Order, ErrorCode> {
+        self.orders.get_mut(&id).ok_or(ErrorCode::OrderNotFound) // New method implementation
     }
 }
 

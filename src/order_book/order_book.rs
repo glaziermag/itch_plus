@@ -1,7 +1,7 @@
 
 
-use std::{cell::{RefCell, RefMut}, cmp::{max, min}, rc::Rc};
-use crate::{levels::{indexing::{LevelNode, NodeHolder, TreeOps, TreeRemoval}, level::{Level, LevelOps, LevelType, LevelUpdate, PopCurrent, UpdateType}}, market_executors::executor::Execution, market_handler::Handler, orders::{order::{Order, OrderType}, orders::OrderOps}};
+use std::{cell::{RefCell}, cmp::{max, min}, rc::Rc};
+use crate::{levels::{indexing::{LevelNode, Holder, TreeOps, TreeRemoval}, level::{Level, LevelOps, LevelType, LevelUpdate, PopCurrent, UpdateType}}, market_executors::executor::Execution, market_handler::Handler, orders::{order::{ErrorCode, Order, OrderType}, orders::OrderOps}};
 
 #[derive(Debug)]
 pub enum OrderBookError {
@@ -11,25 +11,25 @@ pub enum OrderBookError {
 
 #[derive(Default)]
 pub struct OrderBook {
-    pub best_bid: Option<NodeHolder<LevelNode>>,
-    pub best_ask: Option<NodeHolder<LevelNode>>,
-    pub bids: Option<NodeHolder<LevelNode>>,
-    pub asks: Option<NodeHolder<LevelNode>>,
+    pub best_bid: Option<Holder<LevelNode>>,
+    pub best_ask: Option<Holder<LevelNode>>,
+    pub bids: Option<Holder<LevelNode>>,
+    pub asks: Option<Holder<LevelNode>>,
 
-    pub best_buy_stop: Option<NodeHolder<LevelNode>>,
-    pub best_sell_stop: Option<NodeHolder<LevelNode>>,
-    pub buy_stop: Option<NodeHolder<LevelNode>>,
-    pub sell_stop: Option<NodeHolder<LevelNode>>,
+    pub best_buy_stop: Option<Holder<LevelNode>>,
+    pub best_sell_stop: Option<Holder<LevelNode>>,
+    pub buy_stop: Option<Holder<LevelNode>>,
+    pub sell_stop: Option<Holder<LevelNode>>,
 
     pub(crate) last_bid_price: u64,
     pub(crate) last_ask_price: u64,
     pub(crate) matching_bid_price: u64,
     pub(crate) matching_ask_price: u64,
 
-    pub best_trailing_buy_stop: Option<NodeHolder<LevelNode>>,
-    pub best_trailing_sell_stop: Option<NodeHolder<LevelNode>>,
-    pub trailing_buy_stop: Option<NodeHolder<LevelNode>>,
-    pub trailing_sell_stop: Option<NodeHolder<LevelNode>>,
+    pub best_trailing_buy_stop: Option<Holder<LevelNode>>,
+    pub best_trailing_sell_stop: Option<Holder<LevelNode>>,
+    pub trailing_buy_stop: Option<Holder<LevelNode>>,
+    pub trailing_sell_stop: Option<Holder<LevelNode>>,
     pub trailing_bid_price: u64,
     pub trailing_ask_price: u64,
 }
@@ -60,71 +60,58 @@ impl OrderBook {
 
 
     //#[cfg(feature = "experimental_level_changes")]
-    pub fn reduce_trailing_stop_order<L>(&mut self, order: &Order, quantity: u64, hidden: u64, visible: u64)
-    where 
-        L: LevelOps,
+    pub fn reduce_trailing_stop_order(&mut self, order_book: &mut OrderBook, order: &mut Order, quantity: u64, hidden: u64, visible: u64)
     {
         // Assuming we have a way to get a mutable reference to an order and its level.
         // Update the price level volume
-        // remove panicking behavior from code
-        match order.level_node {
-            Some(node) => {
-                let mut borrowed_level = node.get().level;
-                // looking to get &mut level isolation here
-                borrowed_level.subtract_volumes(order);
-                if order.leaves_quantity == 0 {
-                    borrowed_level.unlink_order(order)
-                }
-                if borrowed_level.total_volume == 0 {
-                    order.level_node = None
-                }
-            },
-            None => {
-                eprintln!("order level node not obtained")
-            }
-        }
+        order
+            .level
+            .ok_or(ErrorCode::OtherError("Level is missing for the order".to_string()))
+            .and_then(|mut level| level.subtract_volumes(order))
+            .and_then(|level| level.conditional_unlink_order(order))
+            .and_then(|level| level.process_level(order_book, order));
     }
 
     // Method to get the best trailing buy stop level
-    pub fn best_trailing_buy_stop(&mut self) -> Option<NodeHolder<LevelNode>> {
-        self.best_trailing_buy_stop
+    pub fn best_trailing_buy_stop(&self) -> Option<Holder<LevelNode>> {
+        self.best_trailing_buy_stop.clone()
     }
 
     // Method to get the best trailing sell stop level
-    pub fn best_trailing_sell_stop(&mut self) -> Option<NodeHolder<LevelNode>> {
-        self.best_trailing_sell_stop
+    pub fn best_trailing_sell_stop(&self) -> Option<Holder<LevelNode>> {
+        self.best_trailing_sell_stop.clone()
     }
 
-    pub fn get_trailing_buy_stop_level(&mut self, price: &u64) -> Option<NodeHolder<LevelNode>> {
+    pub fn get_trailing_buy_stop_level(&mut self, price: &u64) -> Option<Holder<LevelNode>> {
         //(self.trailing_buy_stop.expect("best trailing buy stop failed")).get(price)
-        self.trailing_buy_stop.expect("node not retrieved").find(price)
+        self.trailing_buy_stop.clone().expect("node not retrieved").find(price)
     }
 
     // Method to get the trailing sell stop level
-    pub fn get_trailing_sell_stop_level(&mut self, price: &u64) -> Option<NodeHolder<LevelNode>>                                         
+    pub fn get_trailing_sell_stop_level(&mut self, price: &u64) -> Option<Holder<LevelNode>>                                         
     {
-        self.trailing_sell_stop.expect("node not retrieved").find(price)
+        self.trailing_sell_stop.clone().expect("node not retrieved").find(price)
     }
 
-    pub fn get_next_trailing_stop_level(&mut self, level_node: NodeHolder<LevelNode>) -> Option<NodeHolder<LevelNode>>                                         
+    pub fn get_next_trailing_stop_level(&mut self, level_node: Holder<LevelNode>) -> Option<Holder<LevelNode>>                                         
     {  
-        if level_node.get().level.is_bid() {
+        if level_node.try_borrow().level.is_bid() {
             // Find the next level in reverse order in _trailing_sell_stop
-            self.trailing_sell_stop.expect("best trailing sell stop failed").get_next_lower_level(level_node)
+            self.trailing_sell_stop.clone().expect("best trailing sell stop failed").get_next_lower_level(level_node)
         } else {
             // Find the next level in normal order in _trailing_buy_stop
-            self.trailing_buy_stop.expect("best trailing buy stop failed").get_next_higher_level(level_node)
+            self.trailing_buy_stop.clone().expect("best trailing buy stop failed").get_next_higher_level(level_node)
         }
     }
 
-    pub fn get_next_level_node(&mut self, level_node: NodeHolder<LevelNode>) -> Option<NodeHolder<LevelNode>>                                  
+    pub fn get_next_level_node(&self, level_node: Holder<LevelNode>) -> Option<Holder<LevelNode>>                                  
     {
-        if level_node.get().level.is_bid() {
+        if level_node.try_borrow().level.is_bid() {
             // For a bid, find the next lower level
-            self.bids.expect("bids not retrieved").get_next_lower_level(level_node)
+            self.bids.clone().expect("bids not retrieved").get_next_lower_level(level_node)
         } else {
             // For an ask, find the next higher level
-            self.asks.expect("asks not retrieved").get_next_higher_level(level_node)
+            self.asks.clone().expect("asks not retrieved").get_next_higher_level(level_node)
         }
     }
 
@@ -139,7 +126,7 @@ impl OrderBook {
             let best_stop = self.best_trailing_buy_stop.expect("best stop not retrieved");
             let price: u64;
             if best_stop == level_node {
-                let borrow_stop = best_stop.get();
+                let borrow_stop = best_stop.try_borrow();
                 price = borrow_stop.level.price;
                 self.best_trailing_buy_stop = if borrow_stop.right.is_none() {
                     borrow_stop.right
@@ -155,7 +142,7 @@ impl OrderBook {
             let best_stop = self.best_trailing_sell_stop.expect("best stop not retrieved");
             let price: u64;
             if best_stop == level_node {
-                let borrow_stop = best_stop.get();
+                let borrow_stop = best_stop.try_borrow();
                 price = borrow_stop.level.price;
                 self.best_trailing_sell_stop = if borrow_stop.left.is_none() {
                     borrow_stop.left
@@ -167,53 +154,53 @@ impl OrderBook {
             self.trailing_sell_stop.expect("trailing sell stop not retieved").remove(price);
         }
         // Release the price level
-        // self.level_pool.releaselevel_node.get().level.price)
+        // self.level_pool.releaselevel_node.try_borrow().level.price)
     }
 
-    pub fn add_trailing_stop_level(&mut self, order: &Order) -> Option<NodeHolder<LevelNode>> {
+    pub fn add_trailing_stop_level(&mut self, order: &Order) -> Option<Holder<LevelNode>> {
         let (price, level_node) = if order.is_buy() {
-            let level_node = NodeHolder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order.stop_price)))));
+            let level_node = Holder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order.stop_price)))));
             (order.stop_price, level_node)
         } else {
-            let level_node = NodeHolder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Bid, order.stop_price)))));
+            let level_node = Holder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Bid, order.stop_price)))));
             (order.stop_price, level_node)
         };
         
         if order.is_buy() {
             self.trailing_buy_stop.insert(level_node);
             // Update the best trailing buy stop order price level
-            if self.best_trailing_buy_stop.is_none() || level_node.get().level.price < self.best_trailing_buy_stop.expect("best trailing buy stop failed").get().level.price {
+            if self.best_trailing_buy_stop.is_none() || level_node.try_borrow().level.price < self.best_trailing_buy_stop.expect("best trailing buy stop failed").try_borrow().level.price {
                 self.best_trailing_buy_stop = Some(level_node);
             }
         } else {
             self.trailing_sell_stop.insert(level_node);
             // Update the best trailing sell stop order price level
-            if self.best_trailing_sell_stop.is_none() || level_node.get().level.price < self.best_trailing_sell_stop.expect("best trailing sell stop failed").get().level.price {
+            if self.best_trailing_sell_stop.is_none() || level_node.try_borrow().level.price < self.best_trailing_sell_stop.expect("best trailing sell stop failed").try_borrow().level.price {
                 self.best_trailing_sell_stop = Some(level_node);
             }
         }
         Some(level_node)
     }
 
-    pub fn best_buy_stop(&mut self) -> Option<NodeHolder<LevelNode>> 
+    pub fn best_buy_stop(&self) -> Option<Holder<LevelNode>> 
     {
-        self.best_buy_stop
+        self.best_buy_stop.clone()
     }
 
     // Method to get the best sell stop level
-    pub fn best_sell_stop(&mut self) -> Option<NodeHolder<LevelNode>> 
+    pub fn best_sell_stop(&self) -> Option<Holder<LevelNode>> 
     {
-        self.best_sell_stop
+        self.best_sell_stop.clone()
     }
 
-    pub fn add_stop_level(&mut self, order: &Order) -> Option<NodeHolder<LevelNode>> 
+    pub fn add_stop_level(&mut self, order: &Order) -> Option<Holder<LevelNode>> 
     {
         // Determine the level type and price based on the order node
         // Determine the price and create a level node
         let level_option = if order.is_buy() {
-            NodeHolder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order.stop_price)))))
+            Holder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Ask, order.stop_price)))))
         } else {
-            NodeHolder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Bid, order.stop_price)))))
+            Holder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(LevelType::Bid, order.stop_price)))))
         };
 
         let level_node = level_option;
@@ -222,25 +209,25 @@ impl OrderBook {
             self.buy_stop.insert(level_option);
             // remove panicking behavior from code
             let best_stop = self.best_buy_stop.expect("best stop");
-            if self.best_buy_stop.is_none() || level_node.get().level.price < best_stop.get().level.price {
+            if self.best_buy_stop.is_none() || level_node.try_borrow().level.price < best_stop.try_borrow().level.price {
                 self.best_buy_stop = Some(level_option);
             }
         } else {
             self.sell_stop.insert(level_option);
             // remove panicking behavior from code
             let best_stop = self.best_sell_stop.expect("best stop");
-            if self.best_sell_stop.is_none() || level_node.get().level.price < best_stop.get().level.price {
+            if self.best_sell_stop.is_none() || level_node.try_borrow().level.price < best_stop.try_borrow().level.price {
                 self.best_sell_stop = Some(level_option);
             }
         }
         Some(level_option)
     }
 
-    pub fn create_and_insert_level(&mut self, price: u64, level_type: LevelType) -> Option<NodeHolder<LevelNode>> 
+    pub fn create_and_insert_level(&mut self, price: u64, level_type: LevelType) -> Option<Holder<LevelNode>> 
     {
         // Create a new price level based on the provided level type
         // Insert the price level into the appropriate collection based on level type
-        let new_node = NodeHolder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(level_type, price)))));
+        let new_node = Holder(Rc::new(RefCell::new(LevelNode::from(Level::with_price(level_type, price)))));
         match level_type {
             LevelType::Bid => {
                 if let Some(bids_root) = self.bids {
@@ -279,13 +266,13 @@ impl OrderBook {
         };
 
         if let Some(level_node) = binding {
-            let mut level = level_node.get().level;
+            let mut level = level_node.try_borrow().level;
             level.add_volumes(order);
             // Link the new order to the orders list of the price level
             level.orders.push_back(*order); 
             order.level_node = Some(level_node)
         } else {
-        // let level_node = level_node.get().level;
+        // let level_node = level_node.try_borrow().level;
             order.level_node = level_node
         }
     }
@@ -304,7 +291,7 @@ impl OrderBook {
             }) // Clones the Arc, not the Level
         };
 
-        let mut level = level_node.expect("tree operation failed").get().level;
+        let mut level = level_node.expect("tree operation failed").try_borrow().level;
         // Update the price level volume
         level.add_volumes(order);
 
@@ -315,7 +302,7 @@ impl OrderBook {
         // Unlink the empty order from the orders list of the price level
         level.orders.push_back(*order);
 
-        order.level_node.expect("order node level node expected").get().level = level;
+        order.level_node.expect("order node level node expected").try_borrow().level = level;
     }
 
     pub fn delete_level(&mut self, order: &Order)                                             
@@ -328,7 +315,7 @@ impl OrderBook {
             let price: u64;
             if best_bid == level_node {
                 // Update the best bid price level
-                let borrowed_best = best_bid.get_mut();
+                let borrowed_best = best_bid.try_borrow_mut();
                 self.best_bid = if borrowed_best.left.is_some() {
                     borrowed_best.left
                 } else if borrowed_best.parent.is_some() {
@@ -336,15 +323,15 @@ impl OrderBook {
                 } else {
                     borrowed_best.right
                 };
-                let price: u64 = self.bids.expect("asks not retrieved").get().level.price;
+                let price: u64 = self.bids.expect("asks not retrieved").try_borrow().level.price;
                 self.bids.expect("bids not retrieved").remove(price);
             }
             // Erase the price level from the bid collection
         } else {
             // remove panicking behavior from code
-            let best_ask: NodeHolder<LevelNode> = self.best_ask.expect("best bid not retrieved");
+            let best_ask: Holder<LevelNode> = self.best_ask.expect("best bid not retrieved");
             if best_ask == level_node {
-                let borrowed_best = best_ask.get_mut();
+                let borrowed_best = best_ask.try_borrow_mut();
                 // Update the best bid price level
                 self.best_ask = if borrowed_best.left.is_some() {
                     borrowed_best.left
@@ -353,58 +340,58 @@ impl OrderBook {
                 } else {
                     borrowed_best.right
                 };
-                let price: u64 = self.asks.expect("asks not retrieved").get().level.price;
+                let price: u64 = self.asks.expect("asks not retrieved").try_borrow().level.price;
                 self.asks.expect("asks not retrieved").remove(price);
             }
         }
     }
 
-    pub fn add_level(&mut self, order: &Order) -> Option<NodeHolder<LevelNode>> 
+    pub fn add_level(&mut self, order: &Order) -> Option<Holder<LevelNode>> 
     {
         let level_node = self.create_and_insert_level(order.price, if order.is_buy() { LevelType::Bid } else { LevelType::Ask });
         // remove panicking behavior from code
-        let node_borrow = level_node.expect("add level node borrow").get();
+        let node_borrow = level_node.expect("add level node borrow").try_borrow();
         
         if order.is_buy() {
             // remove panicking behavior from code
-            if self.best_bid.is_none() || node_borrow.level.price > self.best_bid.expect("best bid failed").get().level.price {
+            if self.best_bid.is_none() || node_borrow.level.price > self.best_bid.expect("best bid failed").try_borrow().level.price {
                 self.best_bid = level_node.clone()
             }
         } else {
             // remove panicking behavior from code
-            if self.best_ask.is_none() || node_borrow.level.price < self.best_ask.expect("best ask failed").get().level.price {
+            if self.best_ask.is_none() || node_borrow.level.price < self.best_ask.expect("best ask failed").try_borrow().level.price {
                 self.best_ask = level_node.clone()
             }
         }
         level_node.clone()
     }
 
-    pub fn best_ask(&mut self) -> Option<NodeHolder<LevelNode>>                              
+    pub fn best_ask(& self) -> Option<Holder<LevelNode>>                              
     {
-        self.best_ask
+        self.best_ask.clone()
     }
 
-    pub fn best_bid(&mut self) -> Option<NodeHolder<LevelNode>>                                   
+    pub fn best_bid(&self) -> Option<Holder<LevelNode>>                                   
     {
-        self.best_bid
+        self.best_bid.clone()
     } 
 
-    pub fn get_bid(&mut self, price: u64) -> Option<NodeHolder<LevelNode>>                
+    pub fn get_bid(&mut self, price: u64) -> Option<Holder<LevelNode>>                
     {
-       // let price: u64 = self.bids.expect("asks not retrieved").get().level.price;
-        self.bids.expect("bids not retrieved").find_node_by_price(self.bids.expect("asks not retrieved").get().level.price)
+       // let price: u64 = self.bids.expect("asks not retrieved").try_borrow().level.price;
+        self.bids.expect("bids not retrieved").find_node_by_price(self.bids.expect("asks not retrieved").try_borrow().level.price)
     }
 
-    pub fn get_ask(&mut self, price: u64) -> Option<NodeHolder<LevelNode>>                                
+    pub fn get_ask(&mut self, price: u64) -> Option<Holder<LevelNode>>                                
     {
-       // let price: u64 = self.asks.expect("asks not retrieved").get().level.price;
-        self.asks.expect("asks not retrieved").find_node_by_price(self.asks.expect("asks not retrieved").get().level.price)
+       // let price: u64 = self.asks.expect("asks not retrieved").try_borrow().level.price;
+        self.asks.expect("asks not retrieved").find_node_by_price(self.asks.expect("asks not retrieved").try_borrow().level.price)
     }
 
     pub fn get_market_trailing_stop_price_ask(&mut self) -> u64                                      
     { 
         let last_price = self.last_ask_price;
-        let best_price = self.best_ask.map_or(u64::MAX, |ask_node| ask_node.get().level.price);
+        let best_price = self.best_ask.map_or(u64::MAX, |ask_node| ask_node.try_borrow().level.price);
         std::cmp::max(last_price, best_price)
     }
 
@@ -413,7 +400,7 @@ impl OrderBook {
         let last_price = self.last_bid_price;
         let best_price = if self.best_bid.is_some() {
             // remove panicking behavior from code
-            self.best_bid.expect("best bid").get().level.price
+            self.best_bid.expect("best bid").try_borrow().level.price
         } else {
             0
         };
@@ -426,11 +413,11 @@ impl OrderBook {
             return match order.is_buy() {
                 true => {
                     // remove panicking behavior from code
-                    self.best_bid.expect("best bid").get().level.price == level_node.get().level.price
+                    self.best_bid.expect("best bid").try_borrow().level.price == level_node.try_borrow().level.price
                 },
                 false => {
                     // remove panicking behavior from code
-                    self.best_ask.expect("best ask").get().level.price == level_node.get().level.price
+                    self.best_ask.expect("best ask").try_borrow().level.price == level_node.try_borrow().level.price
                 },
             };
         }
@@ -457,22 +444,22 @@ impl OrderBook {
         self.matching_ask_price = u64::MAX;
     }
 
-    pub fn get_market_ask_price(&mut self) -> u64                                         
+    pub fn get_market_ask_price(&self) -> u64                                         
     {
         let best_price = if self.best_ask.is_some() {
             // remove panicking behavior from code
-            self.best_ask.expect("market ask price").get().level.price
+            self.best_ask.expect("market ask price").try_borrow().level.price
         } else {
             u64::MAX
         };
         min(best_price, self.matching_ask_price)
     }
 
-    pub fn get_market_bid_price(&mut self) -> u64                                          
+    pub fn get_market_bid_price(&self) -> u64                                          
     {
         let best_price = if self.best_bid.is_some() {
             // remove panicking behavior from code
-            self.best_bid.expect("market bid price").get().level.price
+            self.best_bid.expect("market bid price").try_borrow().level.price
         } else {
             0
         };
@@ -536,13 +523,13 @@ impl OrderBook {
         old_price
     }
 
-    pub fn recalculate_trailing_stop_price<E>(&mut self, level_node: Option<NodeHolder<LevelNode>>)
+    pub fn recalculate_trailing_stop_price<E>(&mut self, level_node: Option<Holder<LevelNode>>)
     where
         E: Execution<E> + Handler + OrderOps,
     {
         let mut new_trailing_price;
 
-        let level_type = level_node.expect("level type needed").get().level.level_type;
+        let level_type = level_node.expect("level type needed").try_borrow().level.level_type;
 
         // Skip recalculation if market price goes in the wrong direction
         match level_type {
@@ -574,11 +561,11 @@ impl OrderBook {
             }
         };
 
-        let mut previous: Option<NodeHolder<LevelNode>> = None;
+        let mut previous: Option<Holder<LevelNode>> = None;
 
         while let Some(current_level) = current {
             let mut recalculated = false;
-            let mut node = current_level.get().level.orders.front();
+            let mut node = current_level.try_borrow().level.orders.front();
 
             while let Some(order) = node {
                 let old_stop_price = order.stop_price;
@@ -633,21 +620,21 @@ impl OrderBook {
         //  self.asks.expect("order book asks")).get(&order.price)
         };
 
-        let binding: Option<NodeHolder<LevelNode>>;
+        let binding: Option<Holder<LevelNode>>;
         if let None = existing_level {
             binding = self.add_level(order);
             existing_level = binding;
             update_type = UpdateType::Add;
         }
 
-        let level_node: NodeHolder<LevelNode>;
+        let level_node: Holder<LevelNode>;
         let mut level: Level;
 
         if let Some(level_node) = existing_level {
-            level = level_node.get().level;
+            level = level_node.try_borrow().level;
             level.add_volumes(order);
             level.orders.push_back(*order);
-            order.level_node.expect("order node level not obtained").get().level = level;
+            order.level_node.expect("order node level not obtained").try_borrow().level = level;
         }
 
         LevelUpdate {
@@ -671,7 +658,7 @@ impl OrderBook {
 
         // remove panicking behavior from code
         let mut level_node = order.level_node.expect("level node not retrieved from order node");
-        let mut level = level_node.get().level;
+        let mut level = level_node.try_borrow().level;
         level.total_volume -= quantity;
         level.hidden_volume -= hidden;
         level.visible_volume -= visible;
@@ -705,7 +692,7 @@ impl OrderBook {
     {
         // remove panicking behavior from code
         let mut level_node = order.level_node.expect("level node not retrieved from order node");
-        let mut level = level_node.get().level;
+        let mut level = level_node.try_borrow().level;
         
         // Update the price level volume
         level.subtract_volumes(order);
@@ -740,7 +727,7 @@ impl OrderBook {
     {
         // Find the price level for the order
         // remove panicking behavior from code
-        let mut level = order.level_node.expect("level node not retrieved from order node").get().level;
+        let mut level = order.level_node.expect("level node not retrieved from order node").try_borrow().level;
 
         // Update the price level volume
         level.total_volume -= quantity;
@@ -763,11 +750,11 @@ impl OrderBook {
         // Update the price level volume
         // Find the price level for the order
         // remove panicking behavior from code
-        let mut level = order.level_node.expect("level node not retrieved from order node").get().level;
+        let mut level = order.level_node.expect("level node not retrieved from order node").try_borrow().level;
 
-        level.total_volume -= order.leaves_quantity();
+        level.total_volume -= order.leaves_quantity;
         level.hidden_volume -= order.hidden_quantity();
-        level.visible_volume -= order.visible_quantity();
+        level.visible_volume -= order.visible_quantity;
 
         // Unlink the empty order from the orders list of the price level
         level.orders.pop_current(&order);
@@ -782,7 +769,7 @@ impl OrderBook {
     pub fn delete_trailing_stop_order(&mut self, order: &Order) -> Result<(), &'static str> 
     {
         // remove panicking behavior from code
-        let mut level = order.level_node.expect("level node not retrieved from order node").get().level;
+        let mut level = order.level_node.expect("level node not retrieved from order node").try_borrow().level;
         
         // Update the price level volume
         // check for correctness with doubling up
@@ -811,30 +798,30 @@ impl OrderBook {
             let stop_level = self.best_buy_stop.expect("buy stop not found");
             let borrowed_level = stop_level;
             if stop_level == level_node {
-                self.best_buy_stop = if borrowed_level.get().right.is_none() {
-                    borrowed_level.get().right
+                self.best_buy_stop = if borrowed_level.try_borrow().right.is_none() {
+                    borrowed_level.try_borrow().right
                 } else {
-                    borrowed_level.get().parent
+                    borrowed_level.try_borrow().parent
                 }   
             }
             // Erase the price level from the buy stop orders collection
-            self.best_buy_stop.expect("best buy stop not retrieved").remove(borrowed_level.get().level.price);
-        // stop_level).remove(borrowed_level.get().price);
+            self.best_buy_stop.expect("best buy stop not retrieved").remove(borrowed_level.try_borrow().level.price);
+        // stop_level).remove(borrowed_level.try_borrow().price);
         } else {
             // remove panicking behavior from code
             let stop_level = self.best_sell_stop.expect("buy stop not found");
             let borrowed_level = stop_level;
             if stop_level == level_node  {
                 // Update the best sell stop order price level
-                self.best_sell_stop = if borrowed_level.get().right.is_none() {
-                    borrowed_level.get().right
+                self.best_sell_stop = if borrowed_level.try_borrow().right.is_none() {
+                    borrowed_level.try_borrow().right
                 } else {
-                    borrowed_level.get().parent
+                    borrowed_level.try_borrow().parent
                 }
             }
             // Erase the price level from the sell stop orders collection
-            self.best_sell_stop.expect("best sell stop not retrieved").remove(borrowed_level.get().level.price);
-        // stop_level).remove(borrowed_level.get().price);
+            self.best_sell_stop.expect("best sell stop not retrieved").remove(borrowed_level.try_borrow().level.price);
+        // stop_level).remove(borrowed_level.try_borrow().price);
         }
     }
 }

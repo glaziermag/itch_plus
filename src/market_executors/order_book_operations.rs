@@ -2,8 +2,6 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 
-use crate::levels::level::LevelUpdate;
-
 use crate::order_book::order_book::OrderBook;
 use crate::orders::order::ErrorCode;
 

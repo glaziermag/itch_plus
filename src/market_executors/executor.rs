@@ -2,7 +2,7 @@
 
 use std::cmp::min;
 
-use crate::{levels::{indexing::{LevelNode, NodeHolder}, level::{Level, LevelUpdate, UpdateType}}, market_handler::Handler, order_book::order_book::OrderBook, orders::{order::{ErrorCode, Order, OrderType, TimeInForce}, orders::{OrderOps, Orders}}};
+use crate::{levels::{indexing::{LevelNode, Holder}, level::{Level, LevelUpdate, UpdateType}}, market_handler::Handler, order_book::order_book::OrderBook, orders::{order::{ErrorCode, Order, OrderType, TimeInForce}, orders::{OrderOps, Orders}}};
 
 use super::order_book_operations::{OrderBookContainer, OBMap};
 
@@ -12,15 +12,15 @@ where
 {
     fn activate_stop_order(order_book: &mut OrderBook, orders: &Orders, order: &Order) -> bool;
     fn activate_stop_limit_order(order_book: &mut OrderBook, orders: &Orders, order: &mut Order) -> bool;
-    fn reduce_order(orders: &Orders, order_id: u64, quantity: u64, hidden: bool, visible: bool) -> Option<NodeHolder<LevelNode>>;
+    fn reduce_order(orders: &Orders, order_id: u64, quantity: u64, hidden: bool, visible: bool) -> Option<Holder<LevelNode>>;
     fn match_order(order: &Order);
-    fn calculate_matching_chain_single_level(level_node: Option<NodeHolder<LevelNode>>, price: u64, leaves_quantity: u64) -> u64;
-    fn calculate_matching_chain_cross_levels(bid_level_node: Option<NodeHolder<LevelNode>>, ask_level_node: Option<NodeHolder<LevelNode>>) -> u64;
-    fn execute_matching_chain(level_node: Option<NodeHolder<LevelNode>>, price: u64, chain: u64);
+    fn calculate_matching_chain_single_level(level_node: Option<Holder<LevelNode>>, price: u64, leaves_quantity: u64) -> u64;
+    fn calculate_matching_chain_cross_levels(bid_level_node: Option<Holder<LevelNode>>, ask_level_node: Option<Holder<LevelNode>>) -> u64;
+    fn execute_matching_chain(level_node: Option<Holder<LevelNode>>, price: u64, chain: u64);
     fn activate_stop_orders() -> bool;
-    fn recalculate_trailing_stop_price(best_ask_or_bid: Option<NodeHolder<LevelNode>>);
-    fn activate_individual_stop_orders(stop_level_node: Option<NodeHolder<LevelNode>>, market_price: u64, orders: &Orders) -> bool;
-    fn match_market(order: &Order);
+    fn recalculate_trailing_stop_price(best_ask_or_bid: Option<Holder<LevelNode>>);
+    fn activate_individual_stop_orders(stop_level_node: Option<Holder<LevelNode>>, market_price: u64, orders: &Orders) -> bool;
+    fn match_market(order: &mut Order);
     fn match_limit(order: &Order);
     fn match_order_book();
     fn update_level(order_book: &OrderBook, update: LevelUpdate);
@@ -31,7 +31,7 @@ where
     fn replace_order_internal(id: u64, new_id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool) -> Result<(), ErrorCode>;
     fn modify_order(id: u64, new_price: u64, new_quantity: u64, flag1: bool, flag2: bool, flag3: bool) -> Result<(), ErrorCode>;
     fn delete_order_recursive(&mut self, executing_order_id: u64, flag1: bool, flag2: bool);
-    fn activate_stop_orders_level(node: Option<NodeHolder<LevelNode>>, stop_price: u64);
+    fn activate_stop_orders_level(node: Option<Holder<LevelNode>>, stop_price: u64);
     fn add_stop_order(orders: &Orders, order_books: OBMap, order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
     fn remove_order(orders: &Orders, id: u64);
     fn add_market_order(order_books: OBMap, order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode>;
@@ -84,7 +84,7 @@ where
     E::on_update_order_book(order_book, update.top)
 }
 
-pub fn add_market_order<E>(mut order_books: OBMap, order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_market_order<E>(mut order_books: OBMap, order: &mut Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where                          
     E: Execution<E> + Handler + OrderOps,
 {
@@ -99,7 +99,7 @@ where
     E::on_add_order(&order);
 
     if matching && !recursive {
-        E::match_market(&order);
+        E::match_market(order);
     }
 
     E::on_delete_order(&order);
@@ -113,14 +113,14 @@ where
     Ok(())
 }
 
-pub fn execute_matching_chain<E>(orders: &Orders, order_book: &mut OrderBook, mut level_node: Option<NodeHolder<LevelNode>>, price: u64, mut volume: u64) 
+pub fn execute_matching_chain<E>(orders: &Orders, order_book: &mut OrderBook, mut level_node: Option<Holder<LevelNode>>, price: u64, mut volume: u64) 
 where                                  
     E: Execution<E> + Handler + OrderOps,
 {
-    // the overhead of counting and whatnot not really needed except for the tree integrity it seems
     while volume > 0 {
         if let Some(current_level) = level_node {
-            let mut executing_order = current_level.get_mut().level.orders.front();
+            let mut level_borrow = current_level.try_borrow_mut();
+            let mut executing_order = level_borrow.level.orders.front_mut();
 
             while volume > 0 {
                 if let Some(order) = executing_order {
@@ -139,15 +139,14 @@ where
                     // Reduce the executing order in the order book
                     // orders could be modified
                     E::reduce_order(orders, order.id, quantity, true, false);
-
                     volume -= quantity;
-                    executing_order = order.next();
+                    executing_order = order.next_mut();
                 } else {
                     break;
                 }
             }
-            // Assuming `get_next_level_node` returns an Level
-            if let Some(next_level) = order_book.get_next_level_node(current_level) {
+            // Assuming `get_next_level_node` returns a Level
+            if let Some(next_level) = order_book.get_next_level_node(current_level.clone()) {
                 level_node = Some(next_level);
             } else {
                 break;
@@ -163,7 +162,6 @@ where
     E: Execution<E> + Handler + OrderOps,
 {     
     let mut order_book = order_books.get_order_book(&order.symbol_id).expect("order book not found");
-    let mut order = orders.get_order(order.symbol_id).expect("order node not found");
 
     E::on_add_order(&order);
 
@@ -173,14 +171,15 @@ where
 
     if (order.leaves_quantity > 0) && !order.is_ioc() && !order.is_fok() {
     // let order = order.new(&order);
-        if orders.insert_order(&order.id, *order).is_some() {
+        if orders.insert_order(&order.id, order).is_some() {
             // Order duplicate
             E::on_delete_order(&order);
             // order_pool.release(order.new(&order));
         } else {
             // Update level with the new order
             // let order_book = E::add_order(order.new(&order));
-            E::update_level(order_book, order_book.add_order(order));
+            let level_update = order_book.add_order(order);
+            E::update_level(order_book, level_update);
         }
     } else {
         E::on_delete_unmatched_order(&order);
@@ -197,10 +196,10 @@ where
 
 pub trait Matching<E: Execution<E> + Handler + OrderOps> {
     fn match_limit(order: &Order);
-    fn match_market(order_book: &mut OrderBook, order: &Order) -> Result<(), ErrorCode>;
+    fn match_market(order_book: &mut OrderBook, order: &mut Order) -> Result<(), ErrorCode>;
     fn match_order_book(&mut self);
-    fn match_order(order_book: &mut OrderBook, order: &Order);
-    fn delete_order_recursive(&mut self, id: u64, matching: bool, recursive: bool, order_books: OBMap, orders: &Orders) -> Result<(), ErrorCode>;
+    fn match_order(order_book: &mut OrderBook, order: &mut Order);
+    fn delete_order_recursive(&mut self, id: u64, matching: bool, recursive: bool, order_books: OBMap, orders: &mut Orders) -> Result<(), ErrorCode>;
 }
 
 impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
@@ -211,15 +210,15 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
         E::match_order(order);
     }
 
-    fn match_market(order_book: &mut OrderBook, mut order: &Order) -> Result<(), ErrorCode> 
+    fn match_market(order_book: &mut OrderBook, order: &mut Order) -> Result<(), ErrorCode> 
     {
         // Calculate acceptable market order price with optional slippage value
         match order.order_type {
             OrderType::Buy | OrderType::Market => {
-                order.price = (order_book.best_ask().expect("best ask not retrieved")).get_mut().level.price.saturating_add(order.slippage);
+                order.price = (order_book.best_ask().expect("best ask not retrieved")).try_borrow_mut().level.price.saturating_add(order.slippage);
             },
             _ => {
-                order.price = (order_book.best_bid().expect("best bid not retrieved")).get_mut().level.price.saturating_sub(order.slippage);
+                order.price = (order_book.best_bid().expect("best bid not retrieved")).try_borrow_mut().level.price.saturating_sub(order.slippage);
             },
         }
 
@@ -228,15 +227,15 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
         Ok(())
     }
 
-    fn match_order(order_book: &mut OrderBook, mut order: &Order) 
+    fn match_order(order_book: &mut OrderBook, mut order: &mut Order) 
     {
-        let level_node: Option<NodeHolder<LevelNode>>;
+        let level_node: Option<Holder<LevelNode>>;
         let arbitrage = if order.is_buy() {
             level_node = order_book.best_ask();
-            order.price >= level_node.expect("best ask not retrieved").get().level.price
+            order.price >= level_node.as_ref().expect("best ask not retrieved").try_borrow().level.price
         } else {
             level_node = order_book.best_bid();
-            order.price <= level_node.expect("best ask not retrieved").get().level.price
+            order.price <= level_node.as_ref().expect("best ask not retrieved").try_borrow().level.price
         };  
         
         // Check the arbitrage bid/ask prices
@@ -247,7 +246,7 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
 
         // Special case for 'Fill-Or-Kill'/ll-Or-None' order
         if order.is_fok() || order.is_aon() {
-            let chain = E::calculate_matching_chain_single_level(level_node, order.price, order.leaves_quantity);
+            let chain = E::calculate_matching_chain_single_level(level_node.clone(), order.price, order.leaves_quantity);
 
             E::execute_matching_chain(level_node, order.price, chain);
 
@@ -262,7 +261,8 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
             return;
         }
 
-        let mut executing_order = level_node.expect("best ask not retrieved").get().level.orders.front();
+        let mut binding = level_node.as_ref().expect("node needed").try_borrow_mut();
+        let mut executing_order = binding.level.orders.front_mut();
 
         // Execute crossed orders
         while let Some(order) = executing_order {
@@ -307,7 +307,7 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
                 return;
             }
             
-            let next_executing_order = order.next();
+            let next_executing_order = order.next_mut();
             
             // Move to the next order to execute at the same price level
             if let Some(node) = next_executing_order {
@@ -322,26 +322,24 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
     {
         loop {
             // Check if the best bid price is higher than or equal to the best ask price
-            while let (Some(bid_level_node), Some(ask_level_node)) = 
-                (self.best_bid(), self.best_ask()) {
+            while let (Some(bid_level_node), Some(ask_level_node)) = (self.best_bid(), self.best_ask()) {
                 // Break the loop if bid price is lower than ask price (no arbitrage opportunity)
-                let (bid_level, ask_level) = (bid_level_node.get_mut(), ask_level_node.get_mut());
+                let (mut bid_level, mut ask_level) = (bid_level_node.try_borrow_mut(), ask_level_node.try_borrow_mut());
                 if bid_level.level.price < ask_level.level.price {
                     break;
                 }
 
                 // Retrieve the front E::orders of both bid and ask levels
-                let mut bid_order = bid_level.level.orders.front();
-                let mut ask_order = ask_level.level.orders.front();
+                let mut bid_order = bid_level.level.orders.front_mut();
+                let mut ask_order = ask_level.level.orders.front_mut();
 
                 // Process each pair of bid and ask orders
                 while let (Some(bid_order_handle), Some(ask_order_handle)) = (bid_order, ask_order) {
-                    let next_bid_order = bid_order_handle.next();
-                    let next_ask_order = ask_order_handle.next();
+                     
                     // Check for All-Or-None (AON) E::orders and handle them separately
                     if bid_order_handle.is_aon() || ask_order_handle.is_aon() {
                         // Calculate the matching chain for AON E::orders
-                        let chain = E::calculate_matching_chain_cross_levels(Some(bid_level_node), Some(ask_level_node));
+                        let chain = E::calculate_matching_chain_cross_levels(Some(bid_level_node.clone()), Some(ask_level_node.clone()));
 
                         // If no matching chain is found, exit the function
                         if chain == 0 {
@@ -350,22 +348,22 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
 
                         // Execute matching chains for AON E::orders
                         if bid_order_handle.is_aon() {
-                            let price = bid_order_handle.level_node.expect("bid order handle node not retrieved").get().level.price;
-                            E::execute_matching_chain(Some(bid_level_node), price, chain);
-                            E::execute_matching_chain(Some(ask_level_node), price, chain);
+                            let price = bid_order_handle.level_node.as_ref().expect("bid order handle node not retrieved").try_borrow().level.price;
+                            E::execute_matching_chain(Some(bid_level_node.clone()), price, chain);
+                            E::execute_matching_chain(Some(ask_level_node.clone()), price, chain);
                         } else {
-                            let price = ask_order_handle.level_node.expect("ask order handle node not retrieved").get().level.price;
-                            E::execute_matching_chain(Some(ask_level_node), price, chain);
-                            E::execute_matching_chain(Some(bid_level_node), price, chain);
+                            let price = ask_order_handle.level_node.as_ref().expect("ask order handle node not retrieved").try_borrow().level.price;
+                            E::execute_matching_chain(Some(ask_level_node.clone()), price, chain);
+                            E::execute_matching_chain(Some(bid_level_node.clone()), price, chain);
                         }
                         break;
                     }
 
                     // Determine which order to execute and which to reduce based on leaves quantity
                     let (mut executing_order, mut reducing_order) = if bid_order_handle.leaves_quantity > ask_order_handle.leaves_quantity {
-                        (ask_order_handle, bid_order_handle)
+                        (ask_order_handle.clone(), bid_order_handle.clone())
                     } else {
-                        (bid_order_handle, ask_order_handle)
+                        (bid_order_handle.clone(), ask_order_handle.clone())
                     };
                     
                     // Determine the quantity and price for execution
@@ -374,19 +372,19 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
                     
                     // Execute the selected order
                     E::on_execute_order(&executing_order, price, quantity);
-                    self.update_last_price(executing_order, price);
-                    self.update_matching_price(executing_order, price);
+                    self.update_last_price(&executing_order, price);
+                    self.update_matching_price(&executing_order, price);
                     
                     // Update the executed order's quantity
                     executing_order.executed_quantity += quantity;
                     // Reduce the quantity of the executing order
-                    <OrderBook as Matching<E>>::delete_order_recursive(self, executing_order.id, true, false, OBMap::default(), &Orders::default());
+                    <OrderBook as Matching<E>>::delete_order_recursive(self, executing_order.id, true, false, OBMap::default(), &mut Orders::default());
                     
                     // Execute the reducing order
                     E::on_execute_order(&reducing_order, price, quantity);
                     
-                    self.update_last_price(reducing_order, price);
-                    self.update_matching_price(reducing_order, price);
+                    self.update_last_price(&reducing_order, price);
+                    self.update_matching_price(&reducing_order, price);
                     
                     // Update the reducing order's quantity
                     reducing_order.executed_quantity += quantity;
@@ -395,8 +393,8 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
                     executing_order.leaves_quantity -= quantity;
 
                     // Move to the next pair of E::orders at the same level
-                    bid_order = next_bid_order.as_deref();
-                    ask_order = next_ask_order.as_deref();
+                    bid_order = bid_order_handle.next_mut();
+                    ask_order = ask_order_handle.next_mut();
                 }
                 
                 E::activate_stop_orders_level(self.best_buy_stop(), self.get_market_ask_price());
@@ -410,7 +408,7 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
         }
     }
 
-    fn delete_order_recursive(&mut self, id: u64, matching: bool, recursive: bool, order_books: OBMap, orders: &Orders) -> Result<(), ErrorCode>
+    fn delete_order_recursive(&mut self, id: u64, matching: bool, recursive: bool, mut order_books: OBMap, orders: &mut Orders) -> Result<(), ErrorCode>
     {
         // Validate parameters
         if id == 0 {
@@ -422,12 +420,13 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
 
         // get the valid order book for the order
         // use error code possibly
-    // let order_book = order_books.get(&order.id).ok_or(ErrorCode::OrderBookNotFound).expect("order book");
+        let order_book: &mut OrderBook = order_books.get_mut(&order.id).ok_or(ErrorCode::OrderBookNotFound).expect("order book");
 
         // Delete the order from the order book
         match order.order_type {
             OrderType::Limit => {
-                E::update_level(self, self.add_order(&order));
+                let level_update = order_book.add_order(order);
+                E::update_level(order_book, level_update);
             },
             OrderType::Stop | OrderType::StopLimit => {
                 E::delete_stop_order(&order);
@@ -452,25 +451,28 @@ impl<E: Execution<E> + Handler + OrderOps> Matching<E> for OrderBook {
             E::match_order_book();
         }
 
-        self.reset_matching_price();
+        order_book.reset_matching_price();
 
         // Reset matching price
         Ok(())
     }
 }
 
-fn calculate_matching_chain_single_level<E>(order_book: &OrderBook, mut level_node: Option<NodeHolder<LevelNode>>, price: u64, volume: u64) -> u64 
+fn calculate_matching_chain_single_level<E>(order_book: &OrderBook, mut level_node: Option<Holder<LevelNode>>, price: u64, volume: u64) -> u64 
 where
     E: Execution<E> + Handler + OrderOps,
 {
     let mut available = 0;
     // avoid panics later
    // let mut level_node = level_node.expect("rc node failed");
-    let mut order = level_node.expect("rc node failed").get_mut().level.orders.front();
+    let mut level_clone = level_node.clone();
+    let binding = level_node.as_mut().expect("rc node failed").try_borrow_mut();
+    let mut order = binding.level.orders.front();
 
-    while let Some(nodal_level) = level_node {
+    while let Some(nodal_level) = level_clone {
 
-        let level = nodal_level.get_mut().level;
+        let holder_clone = nodal_level.clone();
+        let level = &holder_clone.try_borrow_mut().level;
         // Check the arbitrage bid/ask prices
         let arbitrage = if level.is_bid() {
             price <= level.price
@@ -507,8 +509,8 @@ where
             // // Now you can safely call `next_mut()` on the locked node
             let next_node = node.next();
 
-            if let Some(next_node_handle) = next_node {
-                order = Some(next_node_handle);
+            if let Some(next_order_handle) = next_node {
+                order = Some(next_order_handle);
             } else {
                 break;
             }
@@ -517,7 +519,7 @@ where
         // Switch to the next price level
         if let Some(next_nodal_level) = order_book.get_next_level_node(nodal_level) {
             // let level_borrow = nodal_level;
-            level_node = Some(next_nodal_level);
+            level_clone = Some(next_nodal_level);
         } else {
             break;
         }
@@ -526,12 +528,12 @@ where
     0
 }
 
-fn calculate_matching_chain_cross_levels<E>(order_book: &mut OrderBook, bid_level: NodeHolder<LevelNode>, ask_level: NodeHolder<LevelNode>) -> u64 
+fn calculate_matching_chain_cross_levels<E>(order_book: &mut OrderBook, bid_level: Holder<LevelNode>, ask_level: Holder<LevelNode>) -> u64 
 where
     E: Execution<E> + Handler + OrderOps,
 {
-    let mut longest_node_level = bid_level.get_mut();
-    let mut shortest_node_level = ask_level.get_mut();
+    let mut longest_node_level = bid_level.try_borrow_mut();
+    let mut shortest_node_level = ask_level.try_borrow_mut();
     // avoid panic
     let mut longest_order = longest_node_level.level.orders.front();
     let mut shortest_order = shortest_node_level.level.orders.front();
@@ -558,28 +560,29 @@ where
     let b_level = bid_level.clone();
     let a_level = ask_level.clone();
     
-    let longest_node_level = b_level.get();
-    let shortest_node_level = a_level.get();
+    let longest_node_level = b_level.try_borrow();
+    let shortest_node_level = a_level.try_borrow();
 
     let mut longest_order = longest_node_level.level.orders.front();
     let mut shortest_order = shortest_node_level.level.orders.front();
 
-    let longest_node_level = Some(bid_level.clone());
-    let shortest_node_level = Some(ask_level.clone());
+    let mut longest_node_level = Some(bid_level.clone());
+    let mut shortest_node_level = Some(ask_level.clone());
 
     // Travel through price levels
-    while let (Some(bid_level), Some(ask_level)) = (longest_node_level, shortest_node_level) {
-       // let (bid_level, ask_level) = (bid_level.get_mut(), ask_level.get_mut());
+    while let (Some(bid_level), Some(ask_level)) = (longest_node_level.clone(), shortest_node_level.clone()) {
+       // let (bid_level, ask_level) = (bid_level.try_borrow_mut(), ask_level.try_borrow_mut());
         while let (Some(bid_order), Some(ask_order)) = (longest_order, shortest_order) {
+
             let need = required.saturating_sub(available);
-            let short_order = shortest_order.expect("shortest order not found");
-            let quantity = if short_order.is_aon() {
-                short_order.leaves_quantity
+            let quantity = if ask_order.is_aon() {
+                ask_order.leaves_quantity
             } else {
-                std::cmp::min(short_order.leaves_quantity, need)
+                std::cmp::min(ask_order.leaves_quantity, need)
             };
             available += quantity;
 
+            // Matching is possible, return the chain size
             if required == available {
                 return required;
             }
@@ -592,34 +595,33 @@ where
                 std::mem::swap(&mut required, &mut available);
                 continue;
             }
+            // Take the next order
+            shortest_order = shortest_order.expect("shortest order pointer should output").next()
         }
 
-        order_book.get_next_level_node(bid_level);
-        //  longest_order = longest_nodal_level.and_then(|level| level.orders.front());
-        let mut longest_order = None;
-
-        if let Some(level_node) = longest_node_level {
-            if let Some(order) = level_node.get().level.orders.front() {
-                longest_order = Some(order); // Clone the order node
-            }
+        if let None = longest_order {
+            longest_node_level = order_book.get_next_level_node(bid_level);
+            if let Some(ref node_level) = longest_node_level {
+                longest_order = node_level.try_borrow_mut().level.orders.pop_front().as_ref();
+            };
         }
 
-        order_book.get_next_level_node(ask_level);
-        if let Some(level_node) = shortest_node_level {
-            if let Some(order) = level_node.get().level.orders.front() {
-                shortest_order = Some(order); // Clone the order node
+        if let None = shortest_order {
+            shortest_node_level = order_book.get_next_level_node(ask_level);
+            if let Some(ref node_level) = shortest_node_level {
+                shortest_order = node_level.try_borrow_mut().level.orders.pop_front().as_ref(); // Clone the order node
             }
         }
     }
     0
 }
 
-pub fn add_stop_order<E>(orders: &Orders, mut order_books: OBMap, mut order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_stop_order<E>(orders: &mut Orders, mut order_books: OBMap, mut order: &mut Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
     // remove panicking behavior from code
-    let mut order_book = order_books.get_order_book( &order.symbol_id).expect("order book not found");
+    let mut order_book = order_books.get_order_book(&order.symbol_id).expect("order book not found");
 
     if order.is_trailing_stop() || order.is_trailing_stop_limit() {
         order.stop_price = order_book.calculate_trailing_stop_price(order);
@@ -645,26 +647,26 @@ where
             order.price = 0;
             order.stop_price = 0;
             order.time_in_force = if order.is_fok() {
-             TimeInForce::FOK
+                TimeInForce::FOK
             } else {
-             TimeInForce::IOD
+                TimeInForce::IOD
             };
 
             E::on_update_order(&order);
-            E::match_market(&order);
+            E::match_market(order);
             E::on_delete_order(&order);
             if matching && !recursive {
                 E::match_order_book();
             }
             
-         order_book.reset_matching_price();
+            order_book.reset_matching_price();
 
             return Ok(());
         }
     }
 
     if order.leaves_quantity > 0 {
-        let mut order = Order::new(order);
+        //let mut order = Order::new(order);
         if orders.insert_order(&order.id, order).is_some() {
             // Order duplicate
             E::on_delete_order(&order);
@@ -690,7 +692,7 @@ where
     Ok(())
 }
 
-pub fn add_stop_limit_order<E>(mut order_books: OBMap, orders: &Orders, mut order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn add_stop_limit_order<E>(mut order_books: OBMap, orders: &mut Orders, mut order: &mut Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
@@ -738,12 +740,13 @@ where
             if order.leaves_quantity > 0 && !order.is_ioc() && !order.is_fok() {
                 // Create a new order
                 let mut order = Order::new(order);
-                if orders.insert_order(&order.id, order).is_some() {
+                if orders.insert_order(&order.id, &order).is_some() {
                     E::on_delete_order(&order);
                     // order_pool.release(order);
                     // Handle duplicate order case here, if needed
                 } else {
-                    E::update_level(order_book, order_book.add_order(&order));
+                    let update = order_book.add_order(&order);
+                    E::update_level(order_book, update);
                 }
             } else {
                 // Call the corresponding MarketHandler
@@ -762,7 +765,7 @@ where
     if order.leaves_quantity > 0 {
         // Insert the order
         let mut order = Order::new(order);
-        if orders.insert_order(&order.id, order).is_some() {
+        if orders.insert_order(&order.id, &order).is_some() {
             // Order duplicate
             E::on_delete_order(&order);
             // order_pool.release(// order.new(&Order));
@@ -789,11 +792,11 @@ where
 }
 
 
-pub fn execute_order<E>(orders: &Orders, order_book: &mut OrderBook, mut order_books: OBMap, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode> 
+pub fn execute_order<E>(orders: &mut Orders, order_book: &mut OrderBook, mut order_books: OBMap, id: u64, price: u64, quantity: u64, matching: bool) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
-    let mut order = orders.get_order(id).map_err(|_| ErrorCode::OrderNotFound)?;
+    let mut order = orders.get_mut_order(id).map_err(|_| ErrorCode::OrderNotFound)?;
 
     let mut order_book = order_books.get_order_book(&order.symbol_id).expect("order book not received");
 
@@ -812,7 +815,8 @@ where
 
     match order.order_type {
         OrderType::Limit => {
-            E::update_level(order_book, order_book.reduce_order(order, quantity, hidden, visible));
+            let update = order_book.reduce_order(order, quantity, hidden, visible);
+            E::update_level(order_book, update);
         },
         OrderType::Stop | OrderType::StopLimit => { 
             order_book.reduce_stop_order(&order, quantity, hidden_delta, visible_delta);
@@ -854,7 +858,7 @@ where
     E::replace_order_internal(id, new_id, new_price, new_quantity, true, false)
 }
 
-pub fn modify_order<E>(mut orders: &Orders, id: u64, new_price: u64, new_quantity: u64, mitigate: bool, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn modify_order<E>(mut orders: &mut Orders, id: u64, new_price: u64, new_quantity: u64, mitigate: bool, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
@@ -867,7 +871,7 @@ where
 
     // Retrieve and modify the order
     // handle with errorcode going forward
-    let mut order = orders.get_order(id)?;
+    let mut order = orders.get_mut_order(id)?;
     
     if order.order_type != OrderType::Limit {
         return Err(ErrorCode::OrderTypeInvalid);
@@ -903,7 +907,7 @@ where
 }
 
 
-pub fn modify_order_volumes<E>(orders: &Orders, id: u64, quantity: u64, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn modify_order_volumes<E>(orders: &mut Orders, id: u64, quantity: u64, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
@@ -915,7 +919,7 @@ where
     }
 
     // Retrieve the order node
-    let mut order = orders.get_order(id).expect("order");
+    let mut order = orders.get_mut_order(id).expect("order");
 
     // Since MarketExecutor deals with limit orders, assume it has its way of handling them.
     // Here, we focus on the logic specific to reducing a limit order.
@@ -944,7 +948,7 @@ where
 }
 
 // different from ref impl
-pub fn reduce_order<E>(order_books: &OBMap, mut order: &Order, id: u64, quantity: u64, matching: bool, recursive: bool, orders: &Orders) -> Result<(), ErrorCode> 
+pub fn reduce_order<E>(order_books: &mut OBMap, mut order: &mut Order, id: u64, quantity: u64, matching: bool, recursive: bool, orders: &mut Orders) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
@@ -985,7 +989,8 @@ where
         E::on_delete_order(&order);
         match order.order_type {
             OrderType::Limit => {
-                E::update_level(order_book, order_book.reduce_order(order, quantity, hidden, visible));
+                let update = order_book.reduce_order(order, quantity, hidden, visible);
+                E::update_level(order_book, update);
             },
             OrderType::Stop | OrderType::StopLimit => {
                 order_book.reduce_stop_order(&order, quantity, hidden, visible);
@@ -1011,12 +1016,12 @@ where
     Ok(())
 }
 
-pub fn replace_order<E>(order_books: OBMap, orders: &Orders, id: u64, order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
+pub fn replace_order<E>(mut order_books: OBMap, orders: &Orders, id: u64, order: &Order, matching: bool, recursive: bool) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
     // Delete the previous order by Id
-    let order_book = order_books.get(&id).expect("order book not found");
+    let order_book = order_books.get_mut(&id).expect("order book not found");
     let order = orders.get(&id).expect("order not found");
     order_book.delete_order(order);
 
@@ -1024,7 +1029,7 @@ where
     Ok(())
 }
 
-pub fn replace_order_internal<E>(id: u64, new_id: u64, new_price: u64, new_quantity: u64, matching: bool, recursive: bool, orders: &Orders, mut order_books: OBMap) -> Result<(), ErrorCode> 
+pub fn replace_order_internal<E>(id: u64, new_id: u64, new_price: u64, new_quantity: u64, matching: bool, recursive: bool, orders: &mut Orders, mut order_books: OBMap) -> Result<(), ErrorCode> 
 where
     E: Execution<E> + Handler + OrderOps,
 {
@@ -1034,7 +1039,7 @@ where
     }
 
     // Retrieve the order to replace
-    let order = orders.get_order(id).expect("order not found");
+    let order = orders.get_mut_order(id).expect("order not found");
     if !order.is_trailing_stop() && !order.is_trailing_stop_limit() {
         return Err(ErrorCode::OrderTypeInvalid);
     }
@@ -1043,20 +1048,21 @@ where
     let mut order_book = order_books.get_order_book(&order.id)?;
 
     // Delete the trailing stop order from the order book
-    order_book.delete_trailing_stop_order(&order);
+    order_book.delete_trailing_stop_order(order);
 
-    // Replace the order
-    let mut new_order = Order {
+    let new_order = Order {
         id: new_id,
         price: new_price,
         quantity: new_quantity,
         executed_quantity: 0,
         leaves_quantity: new_quantity,
+        level_node: order.level_node.clone(),
         ..*order // Clone other fields from the existing order
     };
 
     // Insert the new order into the manager's collection
-    if orders.insert_order(&new_id, new_order).is_some() {
+    
+    if orders.insert_order(&new_id, &new_order).is_some() {
         return Err(ErrorCode::OrderDuplicate);
     }
 
@@ -1074,7 +1080,7 @@ where
     Ok(())
 }
 
-pub fn activate_stop_orders_level<E>(order_book: &mut OrderBook, mut level: &Level, stop_price: u64, orders: &Orders) -> bool 
+pub fn activate_stop_orders_level<E>(order_book: &mut OrderBook, mut level: &mut Level, stop_price: u64, orders: &Orders) -> bool 
 where                                         
     E: Execution<E> + Handler + OrderOps,
 {
@@ -1090,23 +1096,23 @@ where
         return false;
     }
 
-    let mut activating_order = level.orders.front();
-    while let Some(mut order) = activating_order {
-        // Clone next_order to avoid borrow_muting issues
-        let next_activating_order = order.next();
+    let mut activating_order = level.orders.front_mut();
+
+    while let Some(order) = activating_order {
 
         match order.order_type {
             OrderType::Stop | OrderType::TrailingStop => {
                 result |= E::activate_stop_order(order_book, orders, order);
             }
             OrderType::StopLimit | OrderType::TrailingStopLimit => {
-                result |= E::activate_stop_limit_order(order_book, orders, &mut order);
+                result |= E::activate_stop_limit_order(order_book, orders, order);
             }
             _ => {
                 assert!(false, "Unsupported order type!");
             }
         }
-        //let next_order = next_activating_order;
+        
+        let next_activating_order = order.next_mut();
         activating_order = next_activating_order;
     }
     result
@@ -1148,13 +1154,13 @@ where
     result
 }
 
-pub fn activate_individual_stop_orders<E>(order_book: &mut OrderBook, level_node: Option<NodeHolder<LevelNode>>, stop_price: u64, orders: &Orders) -> bool
+pub fn activate_individual_stop_orders<E>(order_book: &mut OrderBook, level_node: Option<Holder<LevelNode>>, stop_price: u64, orders: &Orders) -> bool
 where                                         
     E: Execution<E> + Handler + OrderOps,
 {
     let mut result = false;
     let l_node = level_node.expect("level node borrow failed");
-    let mut borrowed_node = l_node.get_mut();
+    let mut borrowed_node = l_node.try_borrow_mut();
 
     let arbitrage = if borrowed_node.level.is_bid() {
         stop_price <= borrowed_node.level.price
@@ -1167,10 +1173,7 @@ where
 
     let mut activating_order = borrowed_node.level.orders.front_mut();
 
-    while let Some(mut order) = activating_order {
-
-        let order_clone = order.clone();
-        let mut next_activating_order: Option<&mut Order> = order_clone.next_mut();
+    while let Some(order) = activating_order {
 
         match order.order_type {
             OrderType::Stop | OrderType::TrailingStop => {
@@ -1181,12 +1184,13 @@ where
             },
             _ => panic!("Unsupported order type!"),
         }
+        let next_activating_order = order.next_mut();
         activating_order = next_activating_order;
     }
     result
 }
 
-pub fn activate_stop_order<E>(order_book: &mut OrderBook, orders: &mut Orders, mut order: &Order) -> bool 
+pub fn activate_stop_order<E>(order_book: &mut OrderBook, orders: &mut Orders, mut order: &mut Order) -> bool 
 where                                         
     E: Execution<E> + Handler + OrderOps,
 {
@@ -1220,7 +1224,7 @@ where
     true
 }
 
-pub fn activate_stop_limit_order<E>(order_book: &mut OrderBook, mut orders: &Orders, mut order: &Order) -> bool 
+pub fn activate_stop_limit_order<E>(order_book: &mut OrderBook, orders: &mut Orders, order: &mut Order) -> bool 
 where                                         
     E: Execution<E> + Handler + OrderOps,
 {

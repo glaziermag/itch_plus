@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::levels::indexing::{LevelNode, NodeHolder};
+use crate::levels::{indexing::{Holder, LevelNode}, level::Level};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrderSide {
@@ -14,7 +14,7 @@ impl Default for OrderSide {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum OrderType {
     Buy,
     Market,
@@ -31,7 +31,7 @@ impl Default for OrderType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum TimeInForce {
     IOD,
     FOK,
@@ -68,6 +68,12 @@ impl fmt::Display for ErrorCode {
     }
 }
 
+impl From<String> for ErrorCode {
+    fn from(error: String) -> Self {
+        ErrorCode::OtherError(error)
+    }
+}
+
 impl From<&'static str> for ErrorCode {
     fn from(s: &'static str) -> Self {
         ErrorCode::OtherError(s.to_string())
@@ -92,7 +98,8 @@ pub struct Order {
     pub slippage: u64,
     pub trailing_distance: u64,
     pub trailing_step: u64,
-    pub level_node: Option<NodeHolder<LevelNode>>,
+    pub level_node: Option<Holder<LevelNode>>,
+    pub level: Option<Holder<Level>>,
 }
 
 impl Default for Order {
@@ -115,6 +122,7 @@ impl Default for Order {
             hidden_quantity: todo!(),
             visible_quantity: todo!(),
             level_node: todo!(),
+            level: todo!(),
         }
     }
 }
@@ -153,9 +161,9 @@ impl Order {
         Ok(())
     }
 
-    pub fn leaves_quantity(&self) -> u64 {
-        self.leaves_quantity
-    }
+    // pub fn leaves_quantity(&self) -> u64 {
+    //     self.leaves_quantity
+    // }
 
     pub fn is_market(&self) -> bool {
         self.order_type == OrderType::Market
@@ -195,6 +203,7 @@ impl Order {
             slippage: todo!(),
             trailing_distance: todo!(),
             trailing_step: todo!(),
+            level: todo!(),
         }
     }
     pub fn is_limit(&self) -> bool {
@@ -248,7 +257,7 @@ impl Order {
     }
 
     // Returns a mutable reference to the next Order
-    pub fn next_mut(&self) -> Option<&mut Order> {
+    pub fn next_mut(&mut self) -> Option<&mut Order> {
         self.next_mut()
     }
 

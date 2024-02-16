@@ -1,7 +1,9 @@
 
 
-use std::{borrow::{Borrow, BorrowMut}, cell::{Ref, RefCell, RefMut}, ops::{Deref, DerefMut}, rc::Rc};
+use std::{borrow::{Borrow, BorrowMut}, cell::{BorrowError, BorrowMutError, Ref, RefCell, RefMut}, ops::{Deref, DerefMut}, rc::{Rc, Weak}};
 use std::fmt::Debug;
+
+use crate::orders::order::ErrorCode;
 
 use super::level::Level;
 
@@ -15,193 +17,255 @@ where
 
 // Example implementation for a simple wrapper that owns its value.
 #[derive(Debug)]
-pub struct NodeHolder<T>(pub Rc<RefCell<T>>);
+pub struct Holder<T>(pub Rc<RefCell<T>>);
 
-impl<'a, T: 'a> NodeHolder<T> {
-    // Constructor for creating a new NodeHolder
+impl<'a, T: 'a> Holder<T> {
+    // Constructor for creating a new Holder
     pub fn new(data: T) -> Self {
-        NodeHolder(Rc::new(RefCell::new(data)))
+        Holder(Rc::new(RefCell::new(data)))
     }
 
     // Getter that provides an immutable reference to T
-    pub fn get(&self) -> Ref<'_, T> {
+    pub fn borrow(&self) -> Ref<'_, T> {
         (*self.0).borrow()
     }
 
     // Method that provides a mutable reference to T
-    pub fn get_mut(&self) -> RefMut<'_, T> {
+    pub fn borrow_mut(&self) -> RefMut<'_, T> {
         (*self.0).borrow_mut()
+    }
+
+    pub fn try_borrow(&self) -> Result<Ref<'_, T>, BorrowError> {
+        self.0.try_borrow()
+    }
+
+    // Method that tries to provide a mutable reference to T, with error handling
+    pub fn try_borrow_mut(&self) -> Result<RefMut<'_, T>, BorrowMutError> {
+        self.0.try_borrow_mut()
     }
 
     // Setter that allows modifying T
     // pub fn set(&self, value: T) {
-    //     let mut temp = (self.0).borrow_mut();
+    //     let mut temp = (self.0).try_borrow_mut();
     //     temp = value;
     // }
 
-    pub fn find(&self, price: &u64) -> Option<NodeHolder<LevelNode>> {
+    pub fn find(&self, price: &u64) -> Option<Holder<LevelNode>> {
         todo!()
     }
 
     // Method to clone the Rc<RefCell<T>> for shared ownership
-    pub fn clone_inner(&self) -> Rc<RefCell<T>> {
-        Rc::clone(&self.0)
+    pub fn clone(&self) -> Self {
+        Holder(Rc::clone(&self.0))
+    }
+}
+
+impl Holder<LevelNode> { // This impl block is now specifically for Holder<LevelNode>
+
+    // New method to set the parent of a LevelNode
+    pub fn set_parent(&self, parent: &Self) {
+        if let Ok(mut me) = self.try_borrow_mut() {
+            me.parent = Some(Rc::downgrade(&parent.0));
+        }
     }
 }
 
 pub trait TreeOps {
-    fn find_node_by_price(&mut self, price: u64) -> Option<NodeHolder<LevelNode>>;
-    fn insert(&mut self, candidate_node: Option<NodeHolder<LevelNode>>);
-    fn get_next_lower_level(&mut self, level_node: NodeHolder<LevelNode>) -> Option<NodeHolder<LevelNode>>;
-    fn get_next_higher_level(&mut self, level_node: NodeHolder<LevelNode>) -> Option<NodeHolder<LevelNode>>;
+    fn find_node_by_price(&mut self, price: u64) -> Option<Holder<LevelNode>>;
+    fn insert(&mut self, candidate_node: Holder<LevelNode>);
+    fn get_next_lower_level(&self, level_node: Holder<LevelNode>) -> Option<Holder<LevelNode>>;
+    fn get_next_higher_level(&self, level_node: Holder<LevelNode>) -> Option<Holder<LevelNode>>;
 }
 
-impl TreeOps for NodeHolder<LevelNode> {
+impl TreeOps for Holder<LevelNode> {
 
-    fn find_node_by_price(&mut self, price: u64) -> Option<NodeHolder<LevelNode>>                                           
+    fn find_node_by_price(&mut self, price: u64) -> Option<Holder<LevelNode>>                                           
     {
         let mut current = Some(*self);
         while let Some(node) = current {
-            let borrowed_node = *node.get();
-            let node_price = borrowed_node.level.price;
-            if price < node_price {
-                current = borrowed_node.left;
-            } else if price > node_price {
-                current = borrowed_node.right;
+            if let Ok(borrowed_node) = node.try_borrow() {
+                let node_price = borrowed_node.level.price;
+                if price < node_price {
+                    current = borrowed_node.left.clone();
+                } else if price > node_price {
+                    current = borrowed_node.right.clone();
+                } else {
+                    return Some(node.clone());
+                }
             } else {
-                return current;
+                // Optionally handle the error or simply skip/break
+                break;
             }
         }
         None
     }
     
-    fn insert(&mut self, candidate_node: Option<NodeHolder<LevelNode>>)                                           
+    fn insert(&mut self, candidate_node: Holder<LevelNode>)                                           
     {
-        let mut new_node = candidate_node.expect("new node insertion").get_mut();
-        let mut this_node = self.get_mut();
-        if (*new_node).level.price < (*this_node).level.price {
-            if let Some(mut left) = this_node.left {
-                left.insert(candidate_node);
-            } else {
-                // replace with this
-                new_node.parent = Some(self.clone());
-                this_node.left = candidate_node.clone();
-            }
-        } else {
-            if let Some(mut right) = this_node.right {
-                right.insert(candidate_node);
-            } else {
-                // replace with this
-                new_node.parent = Some(self.clone());
-                this_node.right = candidate_node.clone();
+        let candidate_price = candidate_node.try_borrow().map(|n| n.level.price).expect("Failed to borrow candidate node");
+        let mut current = Some(self);
+        loop {
+            match current {
+                Some(node) => {
+                    let mut borrowed_node = node.try_borrow_mut().expect("Failed to borrow current node");
+                    if candidate_price < borrowed_node.level.price {
+                        if let Some(left) = &mut borrowed_node.left {
+                            current = Some(left);
+                        } else {
+                            borrowed_node.left = Some(candidate_node.clone()); // Insert here
+                            // Assuming `set_parent` properly sets the parent of the node.
+                            candidate_node.set_parent(node);
+                            break;
+                        }
+                    } else {
+                        if let Some(right) = &mut borrowed_node.right {
+                            current = Some(right);
+                        } else {
+                            borrowed_node.right = Some(candidate_node.clone()); // Insert here
+                            // Assuming `set_parent` properly sets the parent of the node.
+                            candidate_node.set_parent(node);
+                            break;
+                        }
+                    }
+                },
+                None => break,
             }
         }
     }
 
-    fn get_next_lower_level(&mut self, level_node: NodeHolder<LevelNode>) -> Option<NodeHolder<LevelNode>>                                         
-    {
-        if let Some(left_child) = level_node.get().left {
-            // If there is a left child, go left and then as far right as possible
-            let mut current = left_child;
-            while let Some(right_child) = current.get().right {
-                current = right_child;
-            }
-        } else {
-            // If there is no left child, go up until you find a smaller node
-            while let Some(parent) = level_node.get().parent {
-                if parent.get().level.price < self.get().level.price {
-                    return Some(parent);
-                }
-                *self = parent;
+    fn get_next_lower_level(&self, level_node: Holder<LevelNode>) -> Option<Holder<LevelNode>> {
+        let mut current: Option<&Holder<LevelNode>> = Some(&level_node);
+        let mut last_smaller: Option<Holder<LevelNode>> = None;
+        
+        loop {
+            match current {
+                Some(node) => {
+                    let borrowed_node = node.try_borrow().expect("Failed to borrow node");
+                    
+                    if let Some(left) = &borrowed_node.left {
+                        // Go left once
+                        let mut deepest_right = left;
+                        // Then go right as far as possible
+                        while let Some(right) = deepest_right.try_borrow().expect("should borrow right").right.as_ref() {
+                            deepest_right = right;
+                        }
+                        return Some(deepest_right.clone());
+                    } else {
+                        // No left child, traverse up to find a smaller node
+                        current = borrowed_node.parent.as_ref().map(|p| p.upgrade().as_ref().expect("Failed to upgrade weak reference"));
+                        if current.is_some() && current.unwrap().try_borrow().expect("Failed to borrow parent").level.price < borrowed_node.level.price {
+                            last_smaller = current.cloned();
+                        } else {
+                            break;
+                        }
+                    }
+                },
+                None => break,
             }
         }
-        Some(*self)
+        
+        last_smaller
     }
 
-    fn get_next_higher_level(&mut self, level_node: NodeHolder<LevelNode>) -> Option<NodeHolder<LevelNode>>                                             
-    {
-        if let Some(right_child) = self.get().right {
-            // If there is a right child, go right and then as far left as possible
-            *self = right_child;
-            while let Some(left_child) = self.get().left {
-                *self = left_child.clone();
-            }
-        } else {
-            // If there is no right child, go up until you find a greater node
-            while let Some(parent) = self.get().parent {
-                if parent.get().level.price > self.get().level.price {
-                    return Some(parent);
-                }
-                *self = parent.clone();
+    fn get_next_higher_level(&self, level_node: Holder<LevelNode>) -> Option<Holder<LevelNode>> {
+        let mut current: Option<&Holder<LevelNode>> = Some(&level_node);
+        let mut last_greater: Option<Holder<LevelNode>> = None;
+        
+        loop {
+            match current {
+                Some(node) => {
+                    let borrowed_node = node.try_borrow().expect("Failed to borrow node");
+                    
+                    if let Some(right) = &borrowed_node.right {
+                        // Go right once
+                        let mut deepest_left = right;
+                        // Then go left as far as possible
+                        while let Some(left) = deepest_left.try_borrow().expect("should borrow left").left.as_ref() {
+                            deepest_left = left;
+                        }
+                        return Some(deepest_left.clone());
+                    } else {
+                        // No right child, traverse up to find a greater node
+                        current = borrowed_node.parent.as_ref().map(|p| p.upgrade().as_ref().expect("Failed to upgrade weak reference"));
+                        if current.is_some() && current.unwrap().try_borrow().expect("Failed to borrow parent").level.price > borrowed_node.level.price {
+                            last_greater = current.cloned();
+                        } else {
+                            break;
+                        }
+                    }
+                },
+                None => break,
             }
         }
-        Some(self.clone())
+        
+        last_greater
     }
 }
 
 pub trait TreeRemoval {
-    fn remove(&mut self, price: u64) -> Option<NodeHolder<LevelNode>>;
-    fn remove_recursive(&mut self, price: u64) -> Option<NodeHolder<LevelNode>>;
-    fn find_min(&mut self) -> NodeHolder<LevelNode>;
+    fn remove(&mut self, price: u64) -> Result<Option<Holder<LevelNode>>, ErrorCode>;
+    fn remove_recursive(&mut self, price: u64) -> Result<Option<Holder<LevelNode>>, ErrorCode>;
+    fn find_min(&self) -> Result<Holder<LevelNode>, ErrorCode>;
 }
 
-impl TreeRemoval for NodeHolder<LevelNode>  {
+impl TreeRemoval for Holder<LevelNode>  {
     
-    fn remove(&mut self, price: u64) -> Option<NodeHolder<LevelNode>> 
+    fn remove(&mut self, price: u64) -> Result<Option<Holder<LevelNode>>, ErrorCode> 
     {
-        // This is a placeholder implementation and may need adjustments
-        // based on the specific requirements of your binary tree.
-        // For example, you might need to handle rebalancing the tree
-        // after removal, which is not covered here.
-
-        // Note: This implementation assumes `self.root` exists as part of the LevelNode structure.
         self.remove_recursive(price)
     }
 
-    fn remove_recursive(&mut self, price: u64) -> Option<NodeHolder<LevelNode>> {
-        let current = Some(self);
-        if let Some(node) = current {
-            let mut node_borrowed = node.get_mut();
-            if price < node_borrowed.level.price {
-                node_borrowed.left = node_borrowed.left.expect("left node not retrieved").remove_recursive(price);
-            } else if price > node_borrowed.level.price {
-                node_borrowed.right = node_borrowed.right.expect("right node not retrieved").remove_recursive(price);
+    fn remove_recursive(&mut self, price: u64) -> Result<Option<Holder<LevelNode>>, ErrorCode> {
+        let mut node_borrowed = self.try_borrow_mut().map_err(|_| ErrorCode::OtherError("Failed to borrow node for modification".to_string()))?;
+        if price < node_borrowed.level.price {
+            if let Some(left) = &node_borrowed.left {
+                node_borrowed.left = left.remove_recursive(price)?;
             } else {
-                if node_borrowed.left.is_none() {
-                    return node_borrowed.right.take();
-                } else if node_borrowed.right.is_none() {
-                    return node_borrowed.left.take();
-                }
-
-                let successor_price = node_borrowed.right.expect("right node").find_min().get().level.price;
-                node_borrowed.level.price = successor_price;
-                node_borrowed.right = node_borrowed.right.expect("right node not retrieved").remove_recursive(successor_price);
+                return Err(ErrorCode::OrderNotFound);
             }
-            None
+        } else if price > node_borrowed.level.price {
+            if let Some(right) = &node_borrowed.right {
+                node_borrowed.right = right.remove_recursive(price)?;
+            } else {
+                return Err(ErrorCode::OrderNotFound);
+            }
         } else {
-            None
+            if node_borrowed.left.is_none() {
+                return Ok(node_borrowed.right.take());
+            } else if node_borrowed.right.is_none() {
+                return Ok(node_borrowed.left.take());
+            }
+
+            let successor = node_borrowed.right.as_ref().ok_or(ErrorCode::OrderNotFound)?.find_min();
+            let successor_price = successor.try_borrow().map_err(|_| ErrorCode::OtherError("Failed to borrow successor for price retrieval".to_string()))?.level.price;
+            node_borrowed.level.price = successor_price;
+            node_borrowed.right = node_borrowed.right.as_ref().ok_or(ErrorCode::OrderNotFound)?.remove_recursive(successor_price)?;
         }
+        Ok(None)
     }
     
     // Helper function to find the minimum node starting from a given node
-    fn find_min(&mut self) -> NodeHolder<LevelNode>                                    
-    {
-        let mut current = *self;
-        while let Some(left) = current.get().left {
-            current = left;
+    fn find_min(&self) -> Result<Holder<LevelNode>, ErrorCode> {
+        let mut current = self.clone();
+        loop {
+            let borrowed_current = current.try_borrow().map_err(|_| ErrorCode::OtherError("Failed to borrow node for minimum search".to_string()))?;
+            match &borrowed_current.left {
+                Some(left) => current = left.clone(),
+                None => break,
+            }
         }
-        current
+        Ok(current)
     }
 }
 
-impl<T> PartialEq for NodeHolder<T> {
+impl<T> PartialEq for Holder<T> {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
 // Implementing Deto return Ref<T>, allowing access to T's methods via the dot operator.
-impl<T> Deref for NodeHolder<T> {
+impl<T> Deref for Holder<T> {
     type Target = RefCell<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -209,30 +273,34 @@ impl<T> Deref for NodeHolder<T> {
     }
 }
 
-// Implementing the Clone trait for NodeHolder
-impl<T> Clone for NodeHolder<T> {
+
+
+// Implementing the Clone trait for Holder
+impl<T> Clone for Holder<T> {
     fn clone(&self) -> Self {
-        NodeHolder(Rc::clone(&self.0))
+        Holder(Rc::clone(&self.0))
     }
 }
 
 #[derive(Debug)]
 pub struct LevelNode
 {
-    pub level: Level, // Assuming Level is an u64 for simplicity
-    pub parent: Option<NodeHolder<LevelNode>>,
-    pub left: Option<NodeHolder<LevelNode>>,
-    pub right: Option<NodeHolder<LevelNode>>,
+    pub level: Level,
+    pub parent: Option<Weak<RefCell<LevelNode>>>,
+    pub left: Option<Holder<LevelNode>>,
+    pub right: Option<Holder<LevelNode>>,
 }
 
-// Helper function to find the minimum node starting from a given node
-fn find_min(node: NodeHolder<LevelNode>) -> NodeHolder<LevelNode>                                    
-{
-    let mut current = node;
-    while let Some(left) = current.get().left {
-        current = left;
+impl LevelNode {
+    // Function that returns the level of the node.
+    // For demonstration, we use Result to encapsulate the level or an error.
+    pub fn level(&self) -> Result<&Level, ErrorCode> {
+        Ok(&self.level)
     }
-    current
+
+    pub fn level_mut(&mut self) -> Result<&mut Level, ErrorCode> {
+        Ok(&mut self.level)
+    }
 }
 
 
@@ -241,7 +309,7 @@ fn find_min(node: NodeHolder<LevelNode>) -> NodeHolder<LevelNode>
 //     
 // {
 //     stack: Vec,
-//     next_node: Option<NodeHolder<LevelNode>>,
+//     next_node: Option<Holder<LevelNode>>,
 //     _marker: PhantomData<(&T, PhantomData)>,
 // }
 
@@ -261,9 +329,9 @@ fn find_min(node: NodeHolder<LevelNode>) -> NodeHolder<LevelNode>
 //     
 // {
 //     fn move_to_leftmost(&mut self) {
-//         while let Some(node) = self.next_node.get() {
-//             self.stack.push(node.get());
-//             self.next_node = node.get().left;
+//         while let Some(node) = self.next_node.try_borrow() {
+//             self.stack.push(node.try_borrow());
+//             self.next_node = node.try_borrow().left;
 //         }
 //     }
 // }
@@ -276,7 +344,7 @@ fn find_min(node: NodeHolder<LevelNode>) -> NodeHolder<LevelNode>
 
 //     fn next(&mut self) -> Option<Self::Item> {
 //         if let Some(node) = self.stack.pop() {
-//             self.next_node = node.get().right;
+//             self.next_node = node.try_borrow().right;
 //             self.move_to_leftmost();
 //             Some(node) // This line may need adjustment based on the actual return type you intended for `Some(node)`
 //         } else {
