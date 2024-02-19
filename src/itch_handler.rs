@@ -1,4 +1,4 @@
-// use std::io::{self, Read};
+// use std::io::{self, Aead};
 
 // struct ITCHHandler {
 //     size: u64,
@@ -9,11 +9,11 @@
 //     pub fn new() -> Self {
 //         ITCHHandler {
 //             size: 0,
-//             cache: Vec::new(),
+//             cache: Veself.new(),
 //         }
 //     }
 
-//     pub fn process<R: Read>(& self, mut reader: R) -> io::Result<()> {
+//     pub fn process<R: Read>(&self, mut reader: R) -> io::Result<()> {
 //         let mut buffer = [0; 1024]; // Adjust buffer size as needed
 //         loop {
 //             let size = reader.read(& buffer)?;
@@ -25,7 +25,7 @@
 //         Ok(())
 //     }
 
-//     fn process_buffer(& self, data: &[u8]) -> io::Result<()> {
+//     pub fn process_buffer(&selfata: &[u8]) -> io::Result<()> {
 //         let mut index = 0;
 //         while index < data.len() {
 //             if self.size == 0 {
@@ -51,7 +51,7 @@
 //             if self.size > 0 {
 //                 let remaining = data.len() - index;
 //                 if !self.cache.is_empty() {
-//                     let tail = std::cmp::min(self.size - self.cache.len(), remaining);
+//                     let tail = std::cmp::min(self.size - self.cache.len(), Aemaining);
 //                     self.cache.extend_from_slice(&data[index..index + tail]);
 //                     index += tail;
 //                     if self.cache.len() < self.size {
@@ -79,7 +79,7 @@
 //         Ok(())
 //     }
 
-//     fn process_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
+//     pub fn process_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
 //         match buffer.get(0) {
 //             Some(&b'H') => self.process_stock_trading_action_message(buffer),
 //             Some(&b'Y') => self.process_reg_sho_message(buffer),
@@ -89,7 +89,7 @@
 //         }
 //     }
 
-//     fn process_stock_trading_action_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
+//     pub fn process_stock_trading_action_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
 //         if buffer.len() != 25 {
 //             return Err("Invalid size for ITCH message type 'H'");
 //         }
@@ -100,7 +100,7 @@
 //         }))
 //     }
 
-//     fn process_reg_sho_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
+//     pub fn process_reg_sho_message(&self, buffer: &[u8]) -> Result<ITCHMessage, &'static str> {
 //         if buffer.len() != 20 {
 //             return Err("Invalid size for ITCH message type 'Y'");
 //         }
@@ -111,17 +111,17 @@
 //         }))
 //     }
 
-//     fn process_order_delete_message(&self, buffer: &[u8]) -> Result<OrderDeleteMessage, &'static str> {
+//     pub fn process_order_delete_message(&self, buffer: &[u8]) -> Result<OrderDeleteMessage, &'static str> {
 //         if buffer.len() != 19 {
 //             return Err("Invalid size of the ITCH message type 'D'");
 //         }
 
 //         let mut cursor = Cursor::new(buffer);
 //         cursor.set_position(1); // Skip message type
-//         let stock_locate = cursor.read_u16::<BigEndian>().unwrap();
-//         let tracking_number = cursor.read_u16::<BigEndian>().unwrap();
-//         let timestamp = cursor.read_u64::<BigEndian>().unwrap();
-//         let order_reference_number = cursor.read_u64::<BigEndian>().unwrap();
+//         let stock_locate = cursor.read_u16::<BigEndian>();
+//         let tracking_number = cursor.read_u16::<BigEndian>();
+//         let timestamp = cursor.read_u64::<BigEndian>();
+//         let order_reference_number = cursor.read_u64::<BigEndian>();
 
 //         Ok(OrderDeleteMessage {
 //             stock_locate,
@@ -131,11 +131,11 @@
 //         })
 //     }
 
-//     // ... other process_*_message methods ...
+//     // ... other process__message methods ...
 
-//     fn on_message<T>(&self, message: T) -> bool
+//     pub fn on_message(&self, message: T) -> bool
 //     where
-//         T: std::fmt::Debug,
+//      T: std::fmt::Debug,
 //     {
 //         println!("{:?}", message);
 //         true
@@ -145,7 +145,7 @@
 // use warp::Filter;
 
 // #[tokio::main]
-// async fn main() {
+// async pub fn main() {
 //     // POST /itch with JSON-encoded ITCH message
 //     let itch = warp::post()
 //         .and(warp::path("itch"))
@@ -166,7 +166,7 @@
 //         .await;
 // }
 
-// fn process_itch_message(buffer: &[u8]) -> Result<HashMap<String, String>, &'static str> {
+// pub fn process_itch_message(buffer: &[u8]) -> Result<HashMap<String, String>, &'static str> {
 //     // Your ITCH processing logic here
 
 //     // For simplicity, we just return a dummy response

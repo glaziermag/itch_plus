@@ -1,9 +1,11 @@
 use core::fmt;
-use std::{sync::{Arc, Mutex, MutexGuard}, ops::Deref};
+use std::sync::mpsc::Sender;
 
-use crate::LevelNodeHandle;
+use crate::{levels::{indexing::{LevelNode}, level::{Level, PopCurrent}}, order_book::order_book::OrderBook};
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+use super::command::Command;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrderSide {
     Buy,
     Sell,
@@ -15,7 +17,7 @@ impl Default for OrderSide {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum OrderType {
     Buy,
     Market,
@@ -32,16 +34,16 @@ impl Default for OrderType {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum TimeInForce {
-    IOC,
+    IOD,
     FOK,
     // Other variants...
 }
 
 impl Default for TimeInForce {
     fn default() -> Self {
-        TimeInForce::IOC // Assuming 'IOC' as a sensible default
+     TimeInForce::IOD // Assuming 'IO' as a sensible default
     }
 }
 
@@ -58,8 +60,9 @@ pub enum ErrorCode {
     OrderTypeInvalid,
     OrderParameterInvalid,
     OrderQuantityInvalid,
-    OrderNodeCreationError,
+    OrderCreationError,
     DummyError,
+    DefaultError, 
     OtherError(String),
 }
 
@@ -69,28 +72,19 @@ impl fmt::Display for ErrorCode {
     }
 }
 
+impl From<String> for ErrorCode {
+    fn from(error: String) -> Self {
+        ErrorCode::OtherError(error)
+    }
+}
+
 impl From<&'static str> for ErrorCode {
     fn from(s: &'static str) -> Self {
         ErrorCode::OtherError(s.to_string())
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct OrderHandle(Arc<Mutex<Order>>);
-
-impl OrderHandle {
-    pub fn lock_unwrap(&self) -> MutexGuard<Order> {
-        self.0.lock().expect("Failed to lock the mutex")
-    }
-}
-
-impl PartialEq for OrderHandle {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-#[derive(PartialEq, Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Order {
     pub id: u64,
     pub symbol_id: u64,
@@ -101,11 +95,14 @@ pub struct Order {
     pub quantity: u64,
     pub executed_quantity: u64,
     pub leaves_quantity: u64,
+    pub hidden_quantity: u64,
+    pub visible_quantity: u64,
     pub time_in_force: TimeInForce,
     pub max_visible_quantity: u64,
     pub slippage: u64,
-    pub trailing_distance: i64,
-    pub trailing_step: i64,
+    pub trailing_distance: u64,
+    pub trailing_step: u64,
+    //pub maybe_level: Level
 }
 
 impl Default for Order {
@@ -125,12 +122,13 @@ impl Default for Order {
             slippage: 0,
             trailing_distance: 0,
             trailing_step: 0,
+            hidden_quantity: todo!(),
+            visible_quantity: todo!(),
         }
     }
 }
 
 impl Order {
-
     pub fn validate(&self) -> Result<(), ErrorCode> {
         // Validate order Id
         if self.id == 0 {
@@ -164,54 +162,12 @@ impl Order {
         Ok(())
     }
 
+    // pub fn leaves_quantity(&self) -> u64 {
+    //     self.leaves_quantity
+    // }
+
     pub fn is_market(&self) -> bool {
         self.order_type == OrderType::Market
-    }
-
-    pub fn is_limit(&self) -> bool {
-        self.order_type == OrderType::Limit
-    }
-
-    pub fn is_trailing_stop(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.order_type == OrderType::TrailingStop
-    }
-
-    pub fn is_trailing_stop_limit(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.order_type == OrderType::TrailingStopLimit
-    }
-
-    pub fn is_buy(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.order_side == OrderSide::Buy
-    }
-
-    pub fn is_fok(&self) -> bool {
-        // Implementation example, adjust according to your needs
-        self.time_in_force == TimeInForce::FOK
-    }
-
-    pub fn is_iceberg(&self) -> bool {
-        // Implement based on your application's requirements
-        false
-    }
-
-    pub fn is_slippage(&self) -> bool {
-        // Implement based on your application's requirements
-        false
-    }
-
-    pub fn is_aon(&self) -> bool {
-        // Implement based on your application's requirements
-        false
-    }
-
-    pub fn is_ioc(&self) -> bool {
-        // Implement based on your application's requirements
-        // For example, you might have an `order_type` field that you compare:
-        // self.order_type == OrderType::IOC
-        false
     }
 
     pub fn hidden_quantity(&self) -> u64 {
@@ -226,71 +182,75 @@ impl Order {
         std::cmp::min(self.leaves_quantity, self.max_visible_quantity)
     }
 
-}
+    pub fn reduce_trailing_stop_order(&mut self, order_book: &mut OrderBook, quantity: u64, hidden: u64, visible: u64) -> Result<(), ErrorCode>
+    {
+        // Assuming we have a way to get a mutable reference to an order and its level.
+        // Update the price level volume
+        if let Some(level) = self.level {
+            // Directly manipulating the level here, assuming these methods modify the level and return a result for chaining.
+            self.subtract_volumes_from_level(level)
+                .and_then(|level| level.conditional_unlink_order(self))
+                .and_then(|level| level.process_level(order_book, self))
+                .map_err(|e| e) // Map the error if needed, or perform additional error handling
+        } else {
+            // Handle the case where the order doesn't have an associated level
+            Err(ErrorCode::DefaultError)
+        }
+    }
 
-#[derive(Debug, Clone, Default)]
-pub struct OrderNodeHandle(Arc<Mutex<OrderNode>>);
+    pub fn subtract_volumes_from_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        level.total_volume -= self.leaves_quantity;
+        level.hidden_volume -= self.hidden_quantity();
+        level.visible_volume -= self.visible_quantity;
+        Ok(level)
+    }
 
-impl OrderNodeHandle {
-    // Method to lock and unwrap the mutex guard
-    pub fn lock_unwrap(&self) -> MutexGuard<OrderNode> {
-        self.0.lock().expect("Failed to lock the OrderNode mutex")
+    // Adds volumes to the Level based on the Order's quantities
+    pub fn add_volumes_to_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        level.total_volume += self.leaves_quantity;
+        level.hidden_volume += self.hidden_quantity();
+        level.visible_volume += self.visible_quantity;
+        Ok(level)
+    }
+
+    // Unlinks the Order from the Level
+    pub fn unlink_order_from_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        level.orders.pop_current(self);
+        Ok(level)
+    }
+
+    // Conditionally unlinks the Order from the Level
+    fn conditional_unlink_order_from_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        if self.leaves_quantity == 0 {
+            self.unlink_order_from_level(level)
+        } else {
+            Ok(level)
+        }
     }
 }
 
-impl PartialEq for OrderNodeHandle {
-    fn eq(&self, other: &Self) -> bool {
-        // Compare the memory addresses of the Arcs
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Deref for OrderNodeHandle {
-    type Target = Mutex<OrderNode>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-
-#[derive(PartialEq, Debug, Default)]
-pub struct OrderNode {
-    // Nullable reference to LevelNode
-    pub order_handle: OrderHandle,
-    pub id: u64,
-    pub symbol_id: u64,
-    pub slippage: u64,
-    pub price: u64,
-    pub quantity: u64, 
-    pub leaves_quantity: u64,
-    pub executed_quantity: u64,
-    pub hidden_quantity: u64,
-    pub visible_quantity: u64,
-    pub level_node_handle: LevelNodeHandle,
-    pub order_type: OrderType,
-    pub stop_price: u64,
-    pub time_in_force: TimeInForce,
-}
-
-impl OrderNode {
+impl Order {
     // Corresponds to the C++ constructor that accepts an Order
-    fn new(order_handle: OrderHandle) -> Self {
+    pub fn new(order: &Order) -> Self {
         Self {
-            level_node_handle: todo!(),
             id: todo!(),
+            level_node: todo!(),
             symbol_id: todo!(),
-            slippage: todo!(),
+            order_type: todo!(),
+            order_side: todo!(),
             price: todo!(),
+            stop_price: todo!(),
             quantity: todo!(),
-            leaves_quantity: todo!(),
             executed_quantity: todo!(),
+            leaves_quantity: todo!(),
             hidden_quantity: todo!(),
             visible_quantity: todo!(),
-            order_type: todo!(),
-            stop_price: todo!(),
             time_in_force: todo!(),
-            order_handle: todo!(),
+            max_visible_quantity: todo!(),
+            slippage: todo!(),
+            trailing_distance: todo!(),
+            trailing_step: todo!(),
+            level: todo!(),
         }
     }
     pub fn is_limit(&self) -> bool {
@@ -328,10 +288,6 @@ impl OrderNode {
         false
     }
 
-    pub fn get_level_node(&self) -> LevelNodeHandle {
-        self.level_node_handle.clone()
-    }
-
     // Check if the order is a trailing stop
     pub fn is_trailing_stop(&self) -> bool {
         matches!(self.order_type, OrderType::TrailingStop)
@@ -342,8 +298,13 @@ impl OrderNode {
         matches!(self.order_type, OrderType::TrailingStopLimit)
     }
 
-    // Returns a mutable reference to the next OrderNode
-    pub fn next_mut(&self) -> Option<OrderNodeHandle> {
+    // Returns a mutable reference to the next Order
+    pub fn next(&self) -> Option<&Order> {
+        self.next()
+    }
+
+    // Returns a mutable reference to the next Order
+    pub fn next_mut(&mut self) -> Option<&mut Order> {
         self.next_mut()
     }
 
