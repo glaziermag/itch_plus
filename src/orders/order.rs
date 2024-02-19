@@ -1,6 +1,9 @@
 use core::fmt;
+use std::sync::mpsc::Sender;
 
-use crate::levels::{indexing::{Holder, LevelNode}, level::Level};
+use crate::{levels::{indexing::{LevelNode}, level::{Level, PopCurrent}}, order_book::order_book::OrderBook};
+
+use super::command::Command;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrderSide {
@@ -59,6 +62,7 @@ pub enum ErrorCode {
     OrderQuantityInvalid,
     OrderCreationError,
     DummyError,
+    DefaultError, 
     OtherError(String),
 }
 
@@ -98,8 +102,7 @@ pub struct Order {
     pub slippage: u64,
     pub trailing_distance: u64,
     pub trailing_step: u64,
-    pub level_node: Option<Holder<LevelNode>>,
-    pub level: Option<Holder<Level>>,
+    //pub maybe_level: Level
 }
 
 impl Default for Order {
@@ -121,8 +124,6 @@ impl Default for Order {
             trailing_step: 0,
             hidden_quantity: todo!(),
             visible_quantity: todo!(),
-            level_node: todo!(),
-            level: todo!(),
         }
     }
 }
@@ -179,6 +180,52 @@ impl Order {
 
     pub fn visible_quantity(&self) -> u64 {
         std::cmp::min(self.leaves_quantity, self.max_visible_quantity)
+    }
+
+    pub fn reduce_trailing_stop_order(&mut self, order_book: &mut OrderBook, quantity: u64, hidden: u64, visible: u64) -> Result<(), ErrorCode>
+    {
+        // Assuming we have a way to get a mutable reference to an order and its level.
+        // Update the price level volume
+        if let Some(level) = self.level {
+            // Directly manipulating the level here, assuming these methods modify the level and return a result for chaining.
+            self.subtract_volumes_from_level(level)
+                .and_then(|level| level.conditional_unlink_order(self))
+                .and_then(|level| level.process_level(order_book, self))
+                .map_err(|e| e) // Map the error if needed, or perform additional error handling
+        } else {
+            // Handle the case where the order doesn't have an associated level
+            Err(ErrorCode::DefaultError)
+        }
+    }
+
+    pub fn subtract_volumes_from_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        level.total_volume -= self.leaves_quantity;
+        level.hidden_volume -= self.hidden_quantity();
+        level.visible_volume -= self.visible_quantity;
+        Ok(level)
+    }
+
+    // Adds volumes to the Level based on the Order's quantities
+    pub fn add_volumes_to_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        level.total_volume += self.leaves_quantity;
+        level.hidden_volume += self.hidden_quantity();
+        level.visible_volume += self.visible_quantity;
+        Ok(level)
+    }
+
+    // Unlinks the Order from the Level
+    pub fn unlink_order_from_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        level.orders.pop_current(self);
+        Ok(level)
+    }
+
+    // Conditionally unlinks the Order from the Level
+    fn conditional_unlink_order_from_level(&self, level: &mut Level) -> Result<&mut Level, ErrorCode> {
+        if self.leaves_quantity == 0 {
+            self.unlink_order_from_level(level)
+        } else {
+            Ok(level)
+        }
     }
 }
 
